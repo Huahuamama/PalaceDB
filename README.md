@@ -6,6 +6,8 @@ PalaceDB is a Windows desktop editor for [CastleDB](https://github.com/ncannasse
 PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文件 `.cdb`（本质是带表结构的 JSON）。
 它按 CastleDB 的格式读写，**不修改文件里没被编辑过的字节**，所以可以和 CastleDB、游戏引擎混用。
 
+<img width="1316" height="790" alt="image" src="https://github.com/user-attachments/assets/fa2a2323-6d9a-45bc-aec6-6a85ab34250f" />
+
 ---
 
 ## 它做什么
