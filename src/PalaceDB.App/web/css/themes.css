@@ -1,0 +1,399 @@
+/* PalaceDB - colour palettes.
+   -----------------------------------------------------------------------------
+   This is the only file that holds colour. Every surface, line and text tone in the
+   application reads one of the custom properties below, so changing a value here
+   repaints the whole window.
+
+   A palette is a `body[data-scheme="..."]` block that restates the properties which
+   differ from its family:
+
+     :root               the light family (the default palette, "light")
+     body.theme-dark     the dark family  (the default palette, "dark")
+     body[data-scheme=X] one named palette on top of the family it belongs to
+
+   The two families exist so that a new palette only has to override the handful of
+   values that make it recognisable; anything it leaves out is inherited.
+
+   Adding your own palette takes two steps:
+
+     1. copy one of the named blocks, give it a new id and change the colours;
+     2. add the same id to SCHEMES in js/settings.js, which is what puts a card in
+        the settings window (name, hint, and three swatch colours).
+
+   The id is also what gets written to the file's side-car (`X.cdb.meta.json`,
+   key "appearance.scheme"), which is how two open databases can be told apart. */
+
+:root {
+  /* --- surfaces ------------------------------------------------------- */
+  --bg: #eef1f6;
+  --bg-raised: #ffffff;
+  --bg-sunken: #e4e8f0;
+  --bg-header: #f5f7fb;
+  --grid-bg: #ffffff;
+  --grid-head: #f2f5fa;
+  --grid-head-text: #33415c;
+  --grid-head-line: rgba(15, 30, 60, 0.10);
+  --grid-head-hover: rgba(59, 110, 245, 0.10);
+  --badge-bg: rgba(15, 30, 60, 0.06);
+  --badge-text: #5b6b85;
+
+  /* --- lines ---------------------------------------------------------- */
+  --border: #dde3ee;
+  --border-strong: #c7d0e0;
+  --grid-border: #e8edf5;
+
+  /* --- text ----------------------------------------------------------- */
+  --text: #1b2436;
+  --text-dim: #4d5b73;
+  --text-faint: #8593aa;
+
+  /* --- interaction ---------------------------------------------------- */
+  --accent: #3b6ef5;
+  --accent-text: #ffffff;
+  --accent-dim: #e5ecff;
+  --selection: #cfdcff;
+  --row-alt: #fafbfe;
+  --row-hover: #f2f6ff;
+  --cursor: #3b6ef5;
+  --cursor-bg: #ffffff;
+  --separator: #3b6ef5;
+  --sep-bg: #eef3ff;
+  --selection-tint: rgba(59, 110, 245, 0.14);
+  --hover: rgba(27, 36, 54, 0.06);
+
+  /* --- table tabs ----------------------------------------------------- */
+  --tab: transparent;
+  --tab-text: #33415c;
+  --tab-border: transparent;
+  --tab-hover: rgba(27, 36, 54, 0.06);
+  --tab-active: #e5ecff;
+  --tab-active-text: #1c3fa8;
+
+  /* --- semantics ------------------------------------------------------ */
+  --danger: #d14343;
+  --warning: #b06d09;
+  --success: #1f9254;
+  --shadow: rgba(20, 30, 50, 0.16);
+  --shadow-sm: 0 1px 2px rgba(20, 30, 50, 0.08);
+  --shadow-md: 0 10px 30px rgba(20, 30, 50, 0.16);
+  --shadow-lg: 0 24px 60px rgba(20, 30, 50, 0.22);
+}
+
+body.theme-dark {
+  --bg: #191a1d;
+  --bg-raised: #202226;
+  --bg-sunken: #141517;
+  --bg-header: #24262a;
+  --grid-bg: #1b1c1f;
+  --grid-head: #23252a;
+  --grid-head-text: #cdd5e2;
+  --grid-head-line: rgba(255, 255, 255, 0.09);
+  --grid-head-hover: rgba(255, 255, 255, 0.07);
+  --badge-bg: rgba(255, 255, 255, 0.10);
+  --badge-text: #b6c1d2;
+
+  --border: #2f3237;
+  --border-strong: #3d4148;
+  --grid-border: #2a2c31;
+
+  --text: #e7ebf2;
+  --text-dim: #a7b0bf;
+  --text-faint: #6f7a8b;
+
+  --accent: #5b9dff;
+  --accent-text: #0a1220;
+  --accent-dim: #2a3a55;
+  --selection: #2b4364;
+  --row-alt: #1f2125;
+  --row-hover: #262930;
+  --cursor: #5b9dff;
+  --cursor-bg: #1b1c1f;
+  --separator: #5b9dff;
+  --sep-bg: #202634;
+  --selection-tint: rgba(91, 157, 255, 0.22);
+  --hover: rgba(255, 255, 255, 0.07);
+
+  --tab: transparent;
+  --tab-text: #c2cbd9;
+  --tab-border: transparent;
+  --tab-hover: rgba(255, 255, 255, 0.07);
+  --tab-active: #2a3a55;
+  --tab-active-text: #dce9ff;
+
+  --danger: #f06a6a;
+  --warning: #e0aa4e;
+  --success: #4cc38a;
+  --shadow: rgba(0, 0, 0, 0.55);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.60);
+}
+
+/* =====================================================================
+   Dark palettes
+   ===================================================================== */
+
+/* Cool, desaturated grey - for working late on a big table. */
+body[data-scheme="graphite"] {
+  --bg: #16171a;
+  --bg-raised: #1e2024;
+  --bg-sunken: #121316;
+  --bg-header: #232529;
+  --grid-bg: #191a1d;
+  --grid-head: #212327;
+  --grid-head-text: #cfd3da;
+  --text: #e5e7eb;
+  --text-dim: #a1a7b1;
+  --text-faint: #6b7280;
+  --accent: #8b93a1;
+  --accent-text: #101215;
+  --accent-dim: #333740;
+  --selection: #343842;
+  --row-alt: #1c1e21;
+  --row-hover: #23262a;
+  --cursor: #b6bcc7;
+  --cursor-bg: #191a1d;
+  --separator: #8b93a1;
+  --sep-bg: #212327;
+  --selection-tint: rgba(139, 147, 161, 0.20);
+  --tab-active: #333740;
+  --tab-active-text: #eef1f5;
+  --border: #2b2e33;
+  --border-strong: #3a3e44;
+  --grid-border: #26282c;
+}
+
+/* Navy blue with a bright azure accent. */
+body[data-scheme="ocean"] {
+  --bg: #0c1424;
+  --bg-raised: #131f36;
+  --bg-sunken: #0a1120;
+  --bg-header: #16223a;
+  --grid-bg: #101a2d;
+  --grid-head: #17233c;
+  --grid-head-text: #c6d7f2;
+  --grid-head-line: rgba(198, 215, 242, 0.12);
+  --badge-bg: rgba(255, 255, 255, 0.10);
+  --badge-text: #a9bcd8;
+  --text: #dbe6f7;
+  --text-dim: #93a7c7;
+  --text-faint: #61748f;
+  --accent: #4d8dff;
+  --accent-text: #04101f;
+  --accent-dim: #1e3358;
+  --selection: #1f3a63;
+  --row-alt: #131e33;
+  --row-hover: #182541;
+  --cursor: #6aa5ff;
+  --cursor-bg: #101a2d;
+  --separator: #4d8dff;
+  --sep-bg: #14203a;
+  --selection-tint: rgba(77, 141, 255, 0.22);
+  --tab-active: #1e3358;
+  --tab-active-text: #dbe9ff;
+  --border: #1f2c45;
+  --border-strong: #2c3d5c;
+  --grid-border: #1b2740;
+}
+
+/* =====================================================================
+   Light palettes
+   ===================================================================== */
+
+/* Warm paper - the original warm alternative to the neutral default. */
+body[data-scheme="sand"] {
+  --bg: #f2ebdd;
+  --bg-raised: #fffdf8;
+  --bg-sunken: #e8dfcd;
+  --bg-header: #faf5ea;
+  --grid-bg: #fffdf8;
+  --grid-head: #f5eddd;
+  --grid-head-text: #4a3d2c;
+  --grid-head-line: rgba(74, 61, 44, 0.12);
+  --grid-head-hover: rgba(176, 116, 58, 0.12);
+  --badge-bg: rgba(74, 61, 44, 0.07);
+  --badge-text: #6b5f4c;
+  --text: #2c2519;
+  --text-dim: #5b4f3d;
+  --text-faint: #8b7f6c;
+  --accent: #b0743a;
+  --accent-text: #fffdf8;
+  --accent-dim: #f0e2cc;
+  --selection: #efdcc0;
+  --row-alt: #fdf9f1;
+  --row-hover: #f7efe0;
+  --cursor: #b0743a;
+  --cursor-bg: #fffdf8;
+  --separator: #b0743a;
+  --sep-bg: #f7eddc;
+  --selection-tint: rgba(176, 116, 58, 0.16);
+  --hover: rgba(74, 61, 44, 0.06);
+  --tab-active: #f0e2cc;
+  --tab-active-text: #6b4520;
+  --border: #e3d7c2;
+  --border-strong: #cdbda2;
+  --grid-border: #ece1cd;
+  --danger: #b8382a;
+  --warning: #96610a;
+  --success: #2c7a32;
+}
+
+/* Blush pink - soft, low contrast, easy on the eyes in daylight. */
+body[data-scheme="rose"] {
+  --bg: #fdf0f4;
+  --bg-raised: #fffbfc;
+  --bg-sunken: #f7e1e9;
+  --bg-header: #fff6f9;
+  --grid-bg: #fffbfc;
+  --grid-head: #fde9f0;
+  --grid-head-text: #6d3a4c;
+  --grid-head-line: rgba(109, 58, 76, 0.10);
+  --grid-head-hover: rgba(226, 85, 127, 0.12);
+  --badge-bg: rgba(109, 58, 76, 0.07);
+  --badge-text: #7d5566;
+  --text: #3a2229;
+  --text-dim: #6b4a55;
+  --text-faint: #a1848e;
+  --accent: #e2557f;
+  --accent-text: #ffffff;
+  --accent-dim: #fbdde6;
+  --selection: #fad2e0;
+  --row-alt: #fff7f9;
+  --row-hover: #fdeef3;
+  --cursor: #e2557f;
+  --cursor-bg: #fffbfc;
+  --separator: #e2557f;
+  --sep-bg: #fce7ee;
+  --selection-tint: rgba(226, 85, 127, 0.16);
+  --hover: rgba(58, 34, 41, 0.06);
+  --tab-text: #6d3a4c;
+  --tab-hover: rgba(58, 34, 41, 0.06);
+  --tab-active: #fbdde6;
+  --tab-active-text: #a32955;
+  --border: #f2dbe2;
+  --border-strong: #e2c0cb;
+  --grid-border: #f7e6ec;
+  --danger: #c93b56;
+  --warning: #a86a10;
+  --success: #2f8a5b;
+}
+
+/* Pale lilac - cool pastel with a violet accent. */
+body[data-scheme="lilac"] {
+  --bg: #f4f1fc;
+  --bg-raised: #fdfcff;
+  --bg-sunken: #eae4f8;
+  --bg-header: #f9f6ff;
+  --grid-bg: #fdfcff;
+  --grid-head: #f0eafc;
+  --grid-head-text: #4a3a6b;
+  --grid-head-line: rgba(74, 58, 107, 0.10);
+  --grid-head-hover: rgba(139, 92, 246, 0.12);
+  --badge-bg: rgba(74, 58, 107, 0.07);
+  --badge-text: #6a5b88;
+  --text: #2a2340;
+  --text-dim: #574a75;
+  --text-faint: #8d81a8;
+  --accent: #8b5cf6;
+  --accent-text: #ffffff;
+  --accent-dim: #e9e0ff;
+  --selection: #ddd0ff;
+  --row-alt: #fbf9ff;
+  --row-hover: #f4eeff;
+  --cursor: #8b5cf6;
+  --cursor-bg: #fdfcff;
+  --separator: #8b5cf6;
+  --sep-bg: #f1eaff;
+  --selection-tint: rgba(139, 92, 246, 0.16);
+  --hover: rgba(42, 35, 64, 0.06);
+  --tab-text: #4a3a6b;
+  --tab-hover: rgba(42, 35, 64, 0.06);
+  --tab-active: #e9e0ff;
+  --tab-active-text: #5b2fc4;
+  --border: #e6dff6;
+  --border-strong: #cdc0ea;
+  --grid-border: #eee7fa;
+  --danger: #c33d5e;
+  --warning: #9a6a08;
+  --success: #2c8a63;
+}
+
+/* Olive green - muted, natural, comfortable for long sessions. */
+body[data-scheme="olive"] {
+  --bg: #eef1e4;
+  --bg-raised: #fbfdf5;
+  --bg-sunken: #e2e7d3;
+  --bg-header: #f5f8ec;
+  --grid-bg: #fbfdf5;
+  --grid-head: #eef2e1;
+  --grid-head-text: #41492c;
+  --grid-head-line: rgba(65, 73, 44, 0.12);
+  --grid-head-hover: rgba(107, 142, 35, 0.14);
+  --badge-bg: rgba(65, 73, 44, 0.07);
+  --badge-text: #5e6647;
+  --text: #262c19;
+  --text-dim: #4f5738;
+  --text-faint: #828a6b;
+  --accent: #6b8e23;
+  --accent-text: #ffffff;
+  --accent-dim: #e2ebcc;
+  --selection: #d8e4bb;
+  --row-alt: #f8fbf0;
+  --row-hover: #eff4e2;
+  --cursor: #6b8e23;
+  --cursor-bg: #fbfdf5;
+  --separator: #6b8e23;
+  --sep-bg: #eff4e0;
+  --selection-tint: rgba(107, 142, 35, 0.18);
+  --hover: rgba(38, 44, 25, 0.06);
+  --tab-text: #41492c;
+  --tab-hover: rgba(38, 44, 25, 0.06);
+  --tab-active: #e2ebcc;
+  --tab-active-text: #455c14;
+  --border: #dde4c8;
+  --border-strong: #c4cfa6;
+  --grid-border: #e6ecd4;
+  --danger: #b23a2a;
+  --warning: #8f6108;
+  --success: #3c7a2e;
+}
+
+/* Mint - fresh and light, with a teal accent. */
+body[data-scheme="mint"] {
+  --bg: #eaf6f2;
+  --bg-raised: #fbfefd;
+  --bg-sunken: #dcefe8;
+  --bg-header: #f2faf7;
+  --grid-bg: #fbfefd;
+  --grid-head: #e8f5f0;
+  --grid-head-text: #2f4a43;
+  --grid-head-line: rgba(47, 74, 67, 0.10);
+  --grid-head-hover: rgba(20, 163, 127, 0.12);
+  --badge-bg: rgba(47, 74, 67, 0.07);
+  --badge-text: #4d6f67;
+  --text: #1c2c28;
+  --text-dim: #40605a;
+  --text-faint: #75938c;
+  --accent: #14a37f;
+  --accent-text: #ffffff;
+  --accent-dim: #d3f0e6;
+  --selection: #c6ebdf;
+  --row-alt: #f6fcfa;
+  --row-hover: #ecf8f4;
+  --cursor: #14a37f;
+  --cursor-bg: #fbfefd;
+  --separator: #14a37f;
+  --sep-bg: #e8f6f1;
+  --selection-tint: rgba(20, 163, 127, 0.16);
+  --hover: rgba(28, 44, 40, 0.06);
+  --tab-text: #2f4a43;
+  --tab-hover: rgba(28, 44, 40, 0.06);
+  --tab-active: #d3f0e6;
+  --tab-active-text: #0b6b53;
+  --border: #d5e9e3;
+  --border-strong: #b3d6cc;
+  --grid-border: #e0f0eb;
+  --danger: #c4433a;
+  --warning: #9a6a08;
+  --success: #12805f;
+}

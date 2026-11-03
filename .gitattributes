@@ -1,0 +1,13 @@
+# Windows checkouts default to CRLF, which would rewrite the sample databases and break
+# the byte-for-byte round-trip tests. Keep everything LF, and treat the data files as
+# binary so nothing touches them.
+* text=auto eol=lf
+
+*.cdb -text
+*.cdb.meta.json text eol=lf
+*.png binary
+*.jpg binary
+*.dll binary
+*.exe binary
+*.zip binary
+*.ico binary

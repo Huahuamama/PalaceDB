@@ -1,0 +1,20 @@
+# Build output and local tooling
+bin/
+obj/
+.vs/
+.build/
+
+# Test runs, screenshots and release smoke folders
+.ui-test-work/
+.shot-work/
+
+# Test data: real .cdb samples with their images. Local only — see README, "Test data".
+tests/fixtures/
+
+# The release folder is published, not committed. Releases go to GitHub Releases.
+dist/
+
+# Editor / agent scratch
+.workbuddy-ai/
+*.user
+*.suo

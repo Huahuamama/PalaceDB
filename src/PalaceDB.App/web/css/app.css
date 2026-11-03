@@ -1,0 +1,1929 @@
+/* PalaceDB editor - layout and components.
+   Colour lives in themes.css, which is loaded first; this file only reads the
+   custom properties it defines. The two size settings arrive as `--font-size` and
+   `--grid-font-size` (see js/settings.js), and the row height is derived from the
+   table font so a larger font cannot clip the second line of a cell. */
+
+:root {
+  /* --- shape ---------------------------------------------------------- */
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  /* --- typography ----------------------------------------------------- */
+  --font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", monospace;
+  --font-size: 15px;
+  --font-size-small: 13px;
+  --grid-font-size: 14px;
+
+  /* --- metrics -------------------------------------------------------- */
+  --row-height: 38px;
+  --head-height: 36px;
+  --gutter-width: 28px;
+  --sidebar-width: 232px;
+  --sidebar-rail: 32px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--font-size);
+  user-select: none;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ---------------------------------------------------------------- menubar */
+
+.menubar {
+  display: flex;
+  align-items: center;
+  height: 42px;
+  flex: 0 0 auto;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  padding: 0 8px;
+  gap: 2px;
+}
+
+.menu { position: relative; }
+
+.menu-title {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  cursor: default;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.menu-title:hover,
+.menu.open .menu-title {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.menu-popup {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 6px;
+  z-index: 100;
+}
+
+.menu.open .menu-popup { display: block; }
+
+.menu-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 28px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.menu-item:hover:not(:disabled) { background: var(--hover); }
+
+.menu-item:disabled { color: var(--text-faint); }
+
+.menu-item kbd {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-small);
+  color: var(--text-faint);
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 8px;
+}
+
+/* "Open Recent" is a nested menu, so the row is a div rather than a button. */
+.menu-item.has-sub { position: relative; }
+
+.menu-item.has-sub:hover { background: var(--hover); }
+
+.menu-arrow {
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.menu-sub {
+  top: -6px;
+  left: calc(100% + 4px);
+  min-width: 400px;
+  max-width: 640px;
+}
+
+.menu-item.has-sub:hover .menu-sub { display: block; }
+
+/* The file name gives way first; the folder keeps one line so the menu rows stay even. */
+.menu-sub .menu-item { gap: 16px; }
+
+.menu-sub .menu-item > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-sub .menu-item kbd {
+  flex: 0 0 auto;
+  display: block;
+  max-width: 330px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A remembered file that has since been deleted stays visible but looks inactive. */
+.menu-item.missing span { color: var(--text-faint); font-style: italic; }
+
+.menubar-spacer { flex: 1; }
+
+.doc-title {
+  color: var(--text-dim);
+  padding-right: 10px;
+  font-size: var(--font-size-small);
+}
+
+/* ---------------------------------------------------------------- context menu */
+
+.context-menu {
+  position: fixed;
+  z-index: 400;
+  min-width: 240px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 6px;
+}
+
+.context-menu[hidden] { display: none; }
+
+.context-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.context-item:hover:not(:disabled) { background: var(--hover); }
+
+.context-item:disabled { color: var(--text-faint); }
+
+.context-item kbd {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-small);
+  color: var(--text-faint);
+}
+
+.context-item .context-label { flex: 1; }
+
+.context-item .context-check {
+  flex: 0 0 14px;
+  width: 14px;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.context-item.has-submenu .context-arrow {
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.context-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 8px;
+}
+
+/* ---------------------------------------------------------------- modal dialog */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 20, 35, 0.38);
+  backdrop-filter: blur(3px);
+}
+
+.modal[hidden] { display: none; }
+
+.modal-box {
+  min-width: 380px;
+  max-width: 520px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  padding: 20px 22px 18px;
+}
+
+.modal-title {
+  font-size: calc(var(--font-size) + 1px);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 14px;
+}
+
+.modal-body { display: block; }
+
+/* Everything inside a dialog is meant to be read and quoted — an error, a column
+   definition, a conflict report — so it can be selected and copied like text anywhere
+   else in the window. The buttons keep their labels unselectable. */
+.modal-box { user-select: text; }
+.modal-actions .tool { user-select: none; }
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.modal-box.wide { max-width: 820px; min-width: 560px; }
+
+/* A dialog that only acknowledges something hides its Cancel button. */
+.modal-actions .tool[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- about */
+
+.about { display: flex; flex-direction: column; }
+
+.about-title { font-size: 20px; font-weight: 600; }
+
+.about-subtitle {
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+  margin: 2px 0 16px;
+}
+
+.about-rows { display: flex; flex-direction: column; gap: 7px; }
+
+.about-row { display: flex; align-items: baseline; gap: 12px; }
+
+.about-key {
+  flex: 0 0 84px;
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+}
+
+.about-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- merge report (F16) ---- */
+
+.merge-report {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.merge-lead,
+.merge-note {
+  margin: 0;
+  font-size: var(--font-size);
+  line-height: 1.45;
+}
+
+.merge-note {
+  color: var(--text-faint);
+  font-size: var(--font-size-small);
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.merge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.merge-row {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: var(--bg-raised);
+}
+
+.merge-path {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.merge-value {
+  display: flex;
+  gap: 8px;
+  font-size: var(--font-size-small);
+  line-height: 1.5;
+}
+
+.merge-key {
+  flex: 0 0 72px;
+  color: var(--text-faint);
+}
+
+.merge-value.mine span:last-child { font-weight: 600; }
+
+.merge-value.base span:last-child { color: var(--text-faint); }
+
+.merge-value span:last-child {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.form { display: flex; flex-direction: column; gap: 10px; }
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* A hidden row must actually disappear: .form-row's display beats the UA [hidden]. */
+.form-row[hidden] { display: none; }
+
+/* Checkbox rows: the box sits in the caption column, the label follows it. */
+.form-row.form-check > input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Specific enough to beat the fixed caption width below, which would otherwise
+   squeeze the sentence into a narrow column and wrap it over several lines. */
+.form-row.form-check > span {
+  flex: 1 1 auto;
+  color: var(--text);
+}
+
+.form-row > span {
+  flex: 0 0 78px;
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+}
+
+/* Field list of a List / Properties column: the same shape as the rest of the form. */
+.form-sub {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.form-sub[hidden] { display: none; }
+
+.form-sub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+}
+
+.form-sub-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.form-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-sub-row .form-input:first-child { flex: 1 1 auto; }
+.form-sub-row .form-input { flex: 0 0 130px; }
+.form-sub-row .sub-remove { flex: 0 0 auto; }
+
+.form-sub-empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--font-size-small);
+}
+
+.form-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--grid-bg);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  padding: 6px 9px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.form-hint {
+  color: var(--text-faint);
+  font-size: var(--font-size-small);
+  margin-left: 88px;
+}
+
+/* ---------------------------------------------------------------- list editor */
+
+/* Second-level table of a List / Properties cell. It sits in the scrolling content
+   right under its row and the rows below are pushed down to make room, so the row you
+   are editing stays on screen. It is a grid like the one above, only smaller. */
+.sub-expansion {
+  position: absolute;
+  left: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 10px 24px -14px var(--shadow);
+}
+
+.sub-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 8px 0 12px;
+  background: var(--grid-head);
+  border-bottom: 1px solid var(--border);
+}
+
+.sub-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: var(--font-size-small);
+  color: var(--text-dim);
+}
+
+.sub-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+
+.sub-tool {
+  padding: 2px 9px;
+  font-size: calc(var(--font-size-small) - 1px);
+  line-height: 18px;
+}
+
+.sub-grid {
+  display: grid;
+  grid-template-columns: var(--gutter-width) minmax(0, 1fr);
+  grid-template-rows: var(--head-height) auto;
+  flex: 0 0 auto;
+}
+
+.sub-corner {
+  background: var(--grid-head);
+  border-right: 1px solid var(--grid-head-line);
+  border-bottom: 1px solid var(--border);
+}
+
+.sub-headwrap {
+  overflow: hidden;
+  background: var(--grid-head);
+  border-bottom: 1px solid var(--border);
+}
+
+.sub-head {
+  display: flex;
+  height: var(--head-height);
+  will-change: transform;
+}
+
+.sub-gutter {
+  position: relative;
+  overflow: hidden;
+  background: var(--grid-bg);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+
+.sub-body {
+  position: relative;
+  min-width: 0;
+  overflow: auto;
+  outline: none;
+  background: var(--grid-bg);
+}
+
+.sub-spacer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.sub-rows {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* The panel is inset in the row it belongs to, so its cells keep the parent row height. */
+.sub-expansion .cell { font-size: var(--font-size-small); }
+
+.sub-empty { color: var(--text-faint); font-size: var(--font-size-small); padding: 8px 4px; }
+
+.sub-editor { max-height: 60vh; overflow: auto; }
+
+.sub-table {
+  border-collapse: collapse;
+  width: 100%;
+  /* Fixed layout keeps the remove button inside the dialog: with auto layout the inputs
+     size the columns from their content and push the last column out of the table. */
+  table-layout: fixed;
+}
+
+.sub-table th {
+  text-align: left;
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  color: var(--grid-head-text);
+  background: var(--grid-head);
+  padding: 5px 8px;
+  border: 1px solid var(--grid-head-line);
+  white-space: nowrap;
+}
+
+.sub-table td {
+  padding: 3px;
+  border: 1px solid var(--border);
+}
+
+.sub-table .sub-cell {
+  width: 100%;
+  border-color: transparent;
+  background: var(--grid-bg);
+}
+
+.sub-table .sub-cell:focus { border-color: var(--accent); }
+
+.sub-remove {
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+button.tool.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The table list doubles as the sheet tab strip. It can be collapsed down to a
+   narrow rail so the grid gets the full window width. */
+.sidebar {
+  width: var(--sidebar-width);
+  flex: 0 0 auto;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  transition: width 0.12s ease-out;
+}
+
+/* Collapsing removes the sidebar completely instead of leaving a strip behind: the
+   toolbar button brings it back, and no horizontal space is wasted meanwhile. */
+.sidebar.collapsed { display: none; }
+
+/* The one toggle lives in the toolbar and never moves: the same button collapses the
+   list and brings it back, so its position, size and style are identical in both
+   states. Only the chevron is mirrored. */
+#sidebarExpand svg { transition: transform 0.15s ease-out; }
+body.sidebar-collapsed #sidebarExpand svg { transform: scaleX(-1); }
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0 8px 0 14px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: calc(var(--font-size-small) - 1px);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-title { flex: 1 1 auto; }
+
+.sidebar-toggle {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-faint);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-small);
+  padding: 0;
+  cursor: default;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.sidebar-toggle:hover { background: var(--hover); color: var(--text); }
+
+.sidebar.collapsed .sidebar-header,
+.sidebar.collapsed .table-list { display: none; }
+
+/* Clickable strip shown in place of the tab list while collapsed. */
+.sidebar-rail {
+  display: none;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.18em;
+  font-size: var(--font-size-small);
+  color: var(--tab-text);
+  background: var(--bg-raised);
+  cursor: default;
+}
+
+.sidebar-rail:hover { background: var(--tab-active); color: var(--tab-active-text); }
+
+.sidebar.collapsed .sidebar-rail { display: none; }
+
+.table-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.table-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: default;
+  background: var(--tab);
+  color: var(--tab-text);
+  border: 1px solid var(--tab-border);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.table-item:hover { background: var(--tab-hover); }
+
+/* The active table is a filled pill with an accent bar on its left edge, which reads
+   at a glance without shouting across the whole sidebar. */
+.table-item.active {
+  background: var(--tab-active);
+  color: var(--tab-active-text);
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.table-item .count {
+  font-size: var(--font-size-small);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The name gives way when the sidebar is narrow, so the dot and the row count stay put. */
+.table-item > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A table that follows a template carries a small dot: its columns are managed by the
+   template, and the tooltip says which one. A table that no longer matches gets a
+   warning dot instead. */
+.tpl-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+.tpl-dot.drift {
+  background: var(--warning);
+  opacity: 1;
+}
+
+.content {
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------------------------------------------------------- grid */
+
+/* Two columns: the fixed row-number gutter and everything that scrolls. The gutter is
+   outside the scroller on purpose, so it never slides away horizontally. */
+.grid {
+  display: none;
+  grid-template-columns: var(--gutter-width) minmax(0, 1fr);
+  grid-template-rows: var(--head-height) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.grid.visible { display: grid; }
+
+/* Top-left corner: the blank square above the row numbers. */
+.grid-corner {
+  background: var(--grid-head);
+  border-right: 1px solid var(--grid-head-line);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Row numbers. Painted from the same virtual window as the rows, offset by the scroll
+   position, so a table with 50 000 rows still only has a few dozen nodes. */
+.grid-gutter {
+  position: relative;
+  overflow: hidden;
+  /* The gutter is as tall as the viewport, so it must not paint the header colour into
+     the empty space below the last row. Each number brings its own background. */
+  background: var(--grid-bg);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+
+.gutter-cell {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--row-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  /* The gutter only has to hold three digits: anything longer is clipped rather than
+     widening the column, which keeps the table text where the eye expects it. */
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: calc(var(--grid-font-size) - 2px);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  background: var(--grid-head);
+  border-bottom: 1px solid var(--grid-border);
+  cursor: default;
+}
+
+.gutter-cell.in-range { background: var(--selection-tint); color: var(--text-dim); }
+.gutter-cell.selected { background: var(--cursor-bg); color: var(--cursor); font-weight: 700; }
+.gutter-cell.sep { color: var(--separator); }
+
+/* The strip the separator is drawn in keeps its place in the gutter too, so the column of
+   numbers stays continuous: a hole there read as a missing row. */
+.gutter-cell.sep-band {
+  background: var(--sep-bg);
+  box-shadow: inset 0 3px 0 var(--separator);
+  border-bottom-color: transparent;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* The row number is also the handle that moves a row: the cursor says so before the
+   pointer goes down, and the row being dragged is dimmed while it travels. */
+.gutter-cell { cursor: grab; }
+.gutter-cell.dragging { opacity: 0.45; cursor: grabbing; }
+.gutter-cell.drop-before::before,
+.gutter-cell.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.gutter-cell.drop-before::before { top: -1px; }
+.gutter-cell.drop-after::after { bottom: -1px; }
+
+/* Shown when a document is open but has no table yet (File ▸ New). */
+.grid-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--grid-bg);
+  color: var(--text-dim);
+}
+
+.grid-empty.hidden { display: none; }
+.grid-empty p { margin: 0; font-size: 15px; }
+
+.grid-head-scroll {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--grid-head);
+  border-bottom: 1px solid var(--border);
+  height: var(--head-height);
+}
+
+.grid-head {
+  display: flex;
+  height: var(--head-height);
+  will-change: transform;
+}
+
+.head-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--head-height);
+  padding: 0 10px;
+  border-right: 1px solid var(--grid-head-line);
+  font-size: var(--grid-font-size);
+  font-weight: 600;
+  color: var(--grid-head-text);
+  flex: 0 0 auto;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.head-cell .type {
+  font-size: calc(var(--grid-font-size) - 3px);
+  font-weight: 400;
+  color: var(--badge-text);
+  background: var(--badge-bg);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+.head-cell.cursor-col {
+  background: var(--grid-head-hover);
+}
+
+.grid-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+  outline: none;
+  background: var(--grid-bg);
+}
+
+.grid-spacer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.grid-rows {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* Invisible input kept focused while a cell is selected. An input method needs a real
+   text field to compose in, otherwise the first keystroke arrives as a plain letter.
+   It sits on the cursor cell so the candidate window opens in the right place. */
+.grid-proxy {
+  position: absolute;
+  width: 1px;
+  height: var(--row-height);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  /* Fully invisible: it exists only so an input method has somewhere to compose and a
+     place to anchor its candidate window. Leaving it faintly visible put a blinking
+     caret in the top-left cell. */
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.grid-row {
+  display: flex;
+  position: absolute;
+  left: 0;
+  height: var(--row-height);
+  contain: layout style;
+}
+
+.grid-row.alt { background: var(--row-alt); }
+
+.grid-row.selected-row { background: var(--selection-tint); }
+
+/* A separator is a strip of its own, exactly one row tall, sitting right above the row it
+   belongs to. It takes that row's place in the layout instead of being painted over it, so
+   the row (and everything below) simply moves down and keeps all of its values. */
+.grid-row.sep-band {
+  background: var(--sep-bg);
+  box-shadow: inset 0 3px 0 var(--separator);
+  pointer-events: none;
+}
+
+/* A named separator writes its title in the middle of the strip; an unnamed one stays a
+   bare band. The strip is a row tall, so the name never lands on a value. */
+.sep-label {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  line-height: 1.25;
+  font-weight: 600;
+  font-size: var(--font-size-small);
+  color: var(--separator);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  /* The row owns the height: it grows to fit a wrapped value, and the cell follows. */
+  align-self: stretch;
+  min-height: var(--row-height);
+  padding: 2px 10px;
+  border-right: 1px solid var(--grid-border);
+  border-bottom: 1px solid var(--grid-border);
+  overflow: hidden;
+  /* Long text wraps instead of running off the edge; the row then grows to show all of
+     it (see `Grid.measureRows`), which is why nothing here caps the height. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  flex: 0 0 auto;
+  font-size: var(--grid-font-size);
+}
+
+.cell.num { justify-content: flex-end; font-family: var(--font-mono); }
+
+/* A selected cell keeps its own fill; the selection is a tint laid over it, otherwise
+   every coloured cell would turn flat white as soon as it is selected. */
+.cell.in-selection { box-shadow: inset 0 0 0 999px var(--selection-tint); }
+
+/* The cursor cell is tinted as soon as it exists, but the box only appears once the grid
+   has been used: a fresh window used to show a stray box in the top-left corner. */
+.cell.cursor { background: var(--cursor-bg); }
+
+.cell.cursor.live {
+  outline: 2px solid var(--cursor);
+  outline-offset: -2px;
+}
+
+.cell.cursor.live.unfocused { outline-style: dashed; }
+
+.cell.state-missing,
+.cell.state-notfound { color: var(--warning); }
+
+.cell.state-duplicate,
+.cell.state-error { color: var(--danger); }
+
+.cell.state-badref { color: var(--danger); font-style: italic; }
+
+.cell.state-empty { color: var(--text-faint); }
+
+.cell .badge {
+  font-size: calc(var(--grid-font-size) - 2px);
+  opacity: 0.7;
+  margin-left: 6px;
+}
+
+/* Image columns store a path, so the cell shows a thumbnail beside the text (R9).
+   The thumbnail slot is always reserved, which keeps rows from jumping when the
+   image data arrives a moment later. */
+.cell.has-thumb { gap: 6px; padding-left: 6px; }
+
+.cell-thumb {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  border-radius: 2px;
+  background: var(--bg-sunken);
+  image-rendering: pixelated;
+}
+
+.cell-thumb.failed {
+  background: transparent;
+  border: 1px dashed var(--warning);
+}
+
+.cell .cell-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A value that does not fit on one line wraps, and the row grows until all of it is
+   visible (`Grid.measureRows` measures this element, not the row). The clamp below is
+   only a guard against one absurd value taking over the window: a paragraph of a few
+   hundred lines would otherwise push every other row off screen. `max-height` on the
+   block rather than -webkit-line-clamp, because the cell is a flex container and the
+   clamp paints its lines on top of each other there. */
+.cell .cell-value {
+  display: block;
+  /* The row grows to fit the wrapped text, so this only stops one pathological value
+     from swallowing the whole window: about twenty lines, after which the tooltip and
+     the editor still hold the complete text. */
+  max-height: calc(var(--grid-font-size) * 1.25 * 20);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.25;
+  max-width: 100%;
+}
+
+.cell.state-nothumb .cell-text { color: var(--warning); }
+
+/* A List / Properties cell whose sub-table is open shows a marker instead of its value:
+   the content is on screen already, under the row, and repeating it here would only
+   suggest the two are separate things. */
+.cell.expanded { color: var(--text-faint); }
+.cell.expanded .expanded-marker { letter-spacing: 2px; }
+
+/* ---------------------------------------------------------------- welcome */
+
+.welcome {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.welcome.hidden { display: none; }
+
+.welcome-inner {
+  text-align: center;
+  padding: 44px 56px 40px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-md);
+  max-width: 460px;
+}
+
+.welcome h1 {
+  font-size: 40px;
+  font-weight: 300;
+  letter-spacing: 0.01em;
+  margin: 0 0 6px;
+}
+
+.welcome p {
+  color: var(--text-dim);
+  margin: 0 0 24px;
+}
+
+.welcome .hint {
+  margin: 20px 0 0;
+  font-size: var(--font-size-small);
+  color: var(--text-faint);
+}
+
+.welcome code {
+  background: var(--bg-sunken);
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 8px;
+  padding: 11px 24px;
+  font: inherit;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+  cursor: default;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+button.primary:hover { filter: brightness(1.08); }
+
+button.primary:active { transform: translateY(1px); }
+
+/* ---------------------------------------------------------------- statusbar */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 28px;
+  flex: 0 0 auto;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  padding: 0 14px;
+  font-size: var(--font-size-small);
+  color: var(--text-faint);
+  /* The error in the status bar is the one line a user wants to quote: let it be
+     selected and copied. */
+  user-select: text;
+}
+
+.statusbar .sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+}
+
+.statusbar-spacer { flex: 1; }
+
+/* ---------------------------------------------------------------- toasts */
+
+.toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 42px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 500;
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 11px 16px;
+  max-width: 460px;
+  box-shadow: var(--shadow-md);
+  animation: toast-in 0.15s ease-out;
+}
+
+.toast.error { border-left-color: var(--danger); }
+.toast.warning { border-left-color: var(--warning); }
+.toast.info { border-left-color: var(--success); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------------------------------------------------------------- cell editors */
+
+.cell-editor {
+  position: absolute;
+  display: flex;
+  align-items: stretch;
+  z-index: 30;
+  background: var(--grid-bg);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.editor-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: var(--grid-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--grid-font-size);
+  padding: 0 8px;
+}
+
+/* Multi-line text cells: the editor grows over the rows below instead of clipping. */
+.cell-editor.multiline {
+  height: auto;
+  align-items: flex-start;
+}
+
+/* A promoted proxy stays a <textarea> even for a single-line cell, so it has to look and
+   behave like an input: no wrapping, no resize handle, text on one line. */
+textarea.editor-input:not(.editor-multiline) {
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  overflow-wrap: normal;
+  line-height: calc(var(--row-height) - 2px);
+  padding: 0 8px;
+}
+
+.editor-input.editor-multiline {
+  resize: none;
+  overflow: hidden;
+  /* pre-wrap keeps the line breaks the user typed AND wraps long lines, so editing a
+     long line never hides its tail off to the right. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  padding: 4px 8px;
+  min-height: var(--row-height);
+}
+
+/* A line break is shown as a marker: rows keep one fixed height. */
+.cell.multiline { color: var(--text-dim); }
+
+.editor-color {
+  flex: 0 0 auto;
+  width: 28px;
+  border: none;
+  background: none;
+  padding: 2px;
+  cursor: default;
+}
+
+.editor-browse {
+  flex: 0 0 auto;
+  width: 28px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-header);
+  color: var(--text-dim);
+  font: inherit;
+  cursor: default;
+}
+
+.editor-browse:hover { background: var(--accent-dim); color: var(--text); }
+
+.cell-dropdown {
+  /* Fixed, not absolute: the grid body clips its children, and a popup for a column near
+     the right edge would otherwise be cut off. The position is computed in JS. */
+  position: fixed;
+  z-index: 40;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 5px;
+}
+
+/* The reference list hangs under an input, so it stays narrow and scrolls on its own. */
+.ref-dropdown { max-height: 260px; }
+
+/* Colour popup: palette grid plus a free picker. */
+.color-popup { padding: 8px; }
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 20px);
+  gap: 4px;
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: default;
+}
+
+.color-swatch:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.color-swatch.current { outline: 2px solid var(--cursor); outline-offset: 1px; }
+
+.color-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.color-hex { width: 90px; font-family: var(--font-mono); font-size: 13px; }
+
+/* Colour cells show the colour itself; the hex value lives in the tooltip. */
+.cell.has-swatch { padding: 3px 6px; }
+
+/* A colour chip keeps the size it has in a one-line row. It is not part of the text, so
+   it must not stretch to fill a row that grew for a wrapped neighbour. */
+.cell-swatch {
+  display: block;
+  width: 100%;
+  height: calc(var(--row-height) - 6px);
+  border: 1px solid var(--grid-border);
+  border-radius: 3px;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  white-space: nowrap;
+  cursor: default;
+  font-size: 14px;
+}
+
+.dropdown-item:hover { background: var(--accent-dim); }
+
+.dropdown-item.selected { color: var(--accent); font-weight: 600; }
+
+.dropdown-item.empty { color: var(--text-faint); font-style: italic; }
+
+.dropdown-item input[type="checkbox"] { margin: 0; }
+
+/* Icon slot of a reference row; reserved for every row so the labels line up (C06). */
+.dropdown-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.dropdown-icon img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.dropdown-icon.failed {
+  border: 1px dashed var(--warning);
+  border-radius: 2px;
+}
+
+.dropdown-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A value whose label is empty: it still has to be a row you can see and click. */
+.dropdown-label.unnamed {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------- toolbar */
+
+.toolbar {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  height: 44px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar.visible { display: flex; }
+
+.tool {
+  background: var(--bg-header);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-small);
+  padding: 6px 12px;
+  cursor: default;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.tool:hover:not(:disabled) { background: var(--accent-dim); border-color: var(--accent); }
+
+.tool:disabled { color: var(--text-faint); opacity: 0.6; }
+
+.tool.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px;
+}
+
+/* The toolbar is a strip of quiet icon buttons: they only gain a surface on hover, so
+   the row reads as icons rather than as a row of boxes. */
+.toolbar .tool {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.toolbar .tool:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
+  color: var(--text);
+}
+
+/* The two real controls keep their outline so they still look like inputs. */
+.toolbar .tool.fill,
+.toolbar select.tool {
+  background: var(--bg-header);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.toolbar-spacer { flex: 1 1 auto; }
+
+/* Icons come from Microsoft Fluent System Icons (20px, regular weight): filled paths,
+   so the colour is taken from the button instead of the path's own fill attribute. */
+.tool svg,
+.tool.fill svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+  display: block;
+}
+
+.tool.fill { gap: 6px; }
+
+/* Status bar: the first validation problem, e.g. a missing identifier. */
+.status-issue {
+  color: var(--danger);
+  font-weight: 600;
+  max-width: 44ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 5px;
+}
+
+/* ---------------------------------------------------------------- column resize */
+
+.head-cell { position: relative; }
+
+.head-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 3;
+}
+
+.head-resizer:hover { background: var(--accent); }
+
+.toolbar select.tool {
+  padding: 4px 4px;
+  background: var(--bg-header);
+}
+
+.toolbar label.tool {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.toolbar input[type="color"] {
+  width: 26px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: none;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------------- settings window */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* A miniature of the window: the bar follows the interface size, the table follows the
+   table size, so both settings show their effect before the dialog is closed. */
+.settings-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.sp-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.sp-brand { font-weight: 700; color: var(--text); }
+
+.sp-tab {
+  padding: 2px 9px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+}
+
+.sp-tab-active {
+  background: var(--tab-active);
+  color: var(--tab-active-text);
+  font-weight: 600;
+}
+
+.sp-grid { background: var(--grid-bg); }
+
+.sp-head,
+.sp-row {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) 70px;
+  font-size: var(--grid-font-size);
+}
+
+.sp-head {
+  background: var(--grid-head);
+  color: var(--grid-head-text);
+  font-weight: 600;
+  height: var(--head-height);
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.sp-row {
+  height: var(--row-height);
+  align-items: center;
+  color: var(--text);
+  border-bottom: 1px solid var(--grid-border);
+}
+
+.sp-row:last-child { border-bottom: none; }
+
+.sp-head > span,
+.sp-row > span {
+  padding: 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--grid-border);
+}
+
+/* The last column is a number, so it is right aligned like the real numeric cells. */
+.sp-head > span:last-child,
+.sp-row > span:last-child {
+  border-right: none;
+  text-align: right;
+}
+
+.sp-cursor { box-shadow: inset 0 0 0 2px var(--cursor); }
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-header);
+}
+
+.settings-group-title {
+  font-size: var(--font-size-small);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-label small {
+  color: var(--text-faint);
+  font-size: var(--font-size-small);
+}
+
+.settings-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 260px;
+}
+
+.settings-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: default;
+}
+
+.settings-value {
+  flex: 0 0 56px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.scheme-grid {
+  display: grid;
+  /* Five to a row: the nine palettes then form two tidy rows instead of an uneven
+     last line, and every card keeps the same width. */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scheme-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: var(--font-size-small);
+  color: var(--text-dim);
+  cursor: default;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, color 0.12s ease;
+}
+
+.scheme-card:hover { border-color: var(--border-strong); color: var(--text); }
+
+/* The chosen scheme is ringed in its own accent, so the card reads as selected without
+   needing a tick that would clash with the swatches. */
+.scheme-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.scheme-swatches {
+  display: flex;
+  height: 26px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.scheme-swatches i { flex: 1 1 0; }
+
+.scheme-name { text-align: center; }
+
+.settings-foot {
+  display: flex;
+  justify-content: flex-start;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+/* ---------------------------------------------------------------- polish */
+
+/* Thin, quiet scrollbars: the default ones are heavy enough to draw attention to the
+   fact that the table scrolls at all. */
+.grid-body::-webkit-scrollbar,
+.sub-body::-webkit-scrollbar,
+.table-list::-webkit-scrollbar,
+.cell-dropdown::-webkit-scrollbar,
+.form-sub-rows::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.grid-body::-webkit-scrollbar-track,
+.sub-body::-webkit-scrollbar-track,
+.table-list::-webkit-scrollbar-track,
+.cell-dropdown::-webkit-scrollbar-track,
+.form-sub-rows::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.grid-body::-webkit-scrollbar-thumb,
+.sub-body::-webkit-scrollbar-thumb,
+.table-list::-webkit-scrollbar-thumb,
+.cell-dropdown::-webkit-scrollbar-thumb,
+.form-sub-rows::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.grid-body::-webkit-scrollbar-thumb:hover,
+.sub-body::-webkit-scrollbar-thumb:hover,
+.table-list::-webkit-scrollbar-thumb:hover,
+.cell-dropdown::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+}
+
+/* One focus ring for every control that can take the keyboard. The grid proxy is a
+   textarea that must stay invisible, so it is excluded. */
+button:focus-visible,
+select:focus-visible,
+input[type="range"]:focus-visible,
+.scheme-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.grid-proxy:focus,
+.grid-proxy:focus-visible {
+  outline: none;
+}
+
+/* The in-cell editor is an overlay on the cell it edits; rounding its corners keeps it
+   from looking like a second, misaligned border. */
+.cell-editor { border-radius: 3px; }
+
+.color-swatch { border-radius: 5px; }
+
+.toolbar input[type="color"] { border-radius: 5px; }
+
+
+/* ---------------------------------------------------------------- table templates */
+
+.status-template {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.status-template.drift { color: var(--warning); }
+
+/* An explanatory line inside a dialog: quieter than the fields around it. */
+.form-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+  line-height: 1.45;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+/* The table-by-table breakdown of what a shared edit costs. */
+.impact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 4px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+}
+
+.impact-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--font-size-small);
+}
+
+.impact-count {
+  color: var(--text-dim);
+  text-align: right;
+}
+
+/* A conflict is explained in one sentence, so it takes the full width and wraps. */
+.impact-detail {
+  flex: 1;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+.impact-total {
+  margin: 0;
+  font-weight: 600;
+}
+
+.template-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.template-row .form-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.template-meta {
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+  white-space: nowrap;
+}
+
+.tool.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}

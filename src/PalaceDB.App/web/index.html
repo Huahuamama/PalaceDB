@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PalaceDB</title>
+<link rel="stylesheet" href="css/themes.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app" class="app">
+
+  <div class="menubar" id="menubar">
+    <div class="menu" data-menu="file">
+      <button class="menu-title" type="button">File</button>
+      <div class="menu-popup">
+        <button class="menu-item" data-action="newWindow"><span>New Window</span><kbd>Ctrl+Shift+N</kbd></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" data-action="newDatabase"><span>New Database...</span><kbd>Ctrl+N</kbd></button>
+        <button class="menu-item" data-action="open"><span>Open...</span><kbd>Ctrl+O</kbd></button>
+        <div class="menu-item has-sub" id="recentRow">
+          <span>Open Recent</span>
+          <span class="menu-arrow">&#9656;</span>
+          <div class="menu-popup menu-sub" id="recentMenu"></div>
+        </div>
+        <button class="menu-item" data-action="save"><span>Save</span><kbd>Ctrl+S</kbd></button>
+        <button class="menu-item" data-action="saveAs"><span>Save As...</span><kbd>Ctrl+Shift+S</kbd></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" data-action="exportLocalized"><span>Export Localized Texts...</span></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" data-action="closeDocument"><span>Close</span><kbd>Ctrl+W</kbd></button>
+        <button class="menu-item" data-action="exit"><span>Exit</span><kbd>Alt+F4</kbd></button>
+      </div>
+    </div>
+
+    <div class="menu" data-menu="edit">
+      <button class="menu-title" type="button">Edit</button>
+      <div class="menu-popup">
+        <button class="menu-item" data-action="undo"><span>Undo</span><kbd>Ctrl+Z</kbd></button>
+        <button class="menu-item" data-action="redo"><span>Redo</span><kbd>Ctrl+Y</kbd></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" data-action="cut"><span>Cut</span><kbd>Ctrl+X</kbd></button>
+        <button class="menu-item" data-action="copy"><span>Copy</span><kbd>Ctrl+C</kbd></button>
+        <button class="menu-item" data-action="paste"><span>Paste</span><kbd>Ctrl+V</kbd></button>
+        <button class="menu-item" data-action="pasteInsert"><span>Insert Paste</span><kbd>Ctrl+Shift+V</kbd></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" data-action="clearCells"><span>Clear Cells</span><kbd>Del</kbd></button>
+        <button class="menu-item" data-action="fillSelection"><span>Fill Selection</span><kbd>Ctrl+Enter</kbd></button>
+        <button class="menu-item" data-action="deleteRows"><span>Delete Rows</span></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" data-action="selectAll"><span>Select All</span><kbd>Ctrl+A</kbd></button>
+      </div>
+    </div>
+
+    <div class="menu" data-menu="view">
+      <button class="menu-title" type="button">View</button>
+      <div class="menu-popup">
+        <button class="menu-item" data-action="toggleTheme"><span>Dark Mode</span><kbd>Ctrl+T</kbd></button>
+        <button class="menu-item" data-action="toggleSidebar"><span>Collapse Table List</span><kbd>Ctrl+B</kbd></button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" data-action="templates"><span>Templates...</span></button>
+        <button class="menu-item" data-action="settings"><span>Settings...</span><kbd>Ctrl+,</kbd></button>
+      </div>
+    </div>
+
+    <div class="menu" data-menu="help">
+      <button class="menu-title" type="button">Help</button>
+      <div class="menu-popup">
+        <button class="menu-item" data-action="about"><span>About PalaceDB</span></button>
+      </div>
+    </div>
+
+    <div class="menubar-spacer"></div>
+    <div class="doc-title" id="docTitle">No database open</div>
+  </div>
+
+  <div class="body">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">Tables</span>
+        <button class="sidebar-toggle" id="addTable" type="button" title="Add a table">+</button>
+      </div>
+      <div class="table-list" id="tableList"></div>
+      <div class="sidebar-rail" id="sidebarRail" title="Expand the table list">Tables</div>
+    </aside>
+
+    <main class="content" id="content">
+      <div class="toolbar" id="toolbar">
+        <!-- One button, one place, one style: it collapses the table list and brings it
+             back, so the control never moves under the pointer. The chevron is mirrored
+             by CSS while the list is collapsed. -->
+        <button class="tool icon" id="sidebarExpand" type="button" data-action="toggleSidebar"
+                title="Collapse the table list (Tab)" aria-label="Toggle the table list">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.179 10.5L12.1805 11.3737C11.9727 11.5556 11.9516 11.8714 12.1335 12.0793C12.3153 12.2871 12.6312 12.3081 12.839 12.1263L14.839 10.3763C14.9475 10.2814 15.0098 10.1442 15.0098 10C15.0098 9.85583 14.9475 9.71866 14.839 9.62372L12.839 7.87372C12.6312 7.69188 12.3153 7.71294 12.1335 7.92075C11.9516 8.12857 11.9727 8.44445 12.1805 8.62629L13.1791 9.50001L9.5 9.50001C9.22386 9.50001 9 9.72387 9 10C9 10.2762 9.22386 10.5 9.5 10.5L13.179 10.5ZM2 14C2 15.1046 2.89543 16 4 16H16C17.1046 16 18 15.1046 18 14V6C18 4.89543 17.1046 4 16 4H4C2.89543 4 2 4.89543 2 6V14ZM4 15C3.44771 15 3 14.5523 3 14L3 6C3 5.44772 3.44771 5 4 5H7L7 15H4ZM8 15L8 5L16 5C16.5523 5 17 5.44771 17 6L17 14C17 14.5523 16.5523 15 16 15L8 15Z"/></svg>
+        </button>
+        <div class="toolbar-sep"></div>
+        <button class="tool icon" data-action="addRow" type="button" title="Add a row" aria-label="Add a row">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5C10.2761 2.5 10.5 2.72386 10.5 3V9.5H17C17.2761 9.5 17.5 9.72386 17.5 10C17.5 10.2761 17.2761 10.5 17 10.5H10.5V17C10.5 17.2761 10.2761 17.5 10 17.5C9.72386 17.5 9.5 17.2761 9.5 17V10.5H3C2.72386 10.5 2.5 10.2761 2.5 10C2.5 9.72386 2.72386 9.5 3 9.5H9.5V3C9.5 2.72386 9.72386 2.5 10 2.5Z"/></svg>
+        </button>
+        <button class="tool icon" data-action="duplicateRows" type="button" title="Duplicate the selected rows" aria-label="Duplicate rows">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.08539 4H5.05005C5.28168 2.85888 6.29056 2 7.50004 2H14C16.2092 2 18 3.79086 18 6V12.5C18 13.7095 17.1412 14.7184 16 14.95V13.9146C16.5826 13.7087 17 13.1531 17 12.5V6C17 4.34315 15.6569 3 14 3H7.50004C6.84693 3 6.29131 3.4174 6.08539 4ZM4.5 5C3.11929 5 2 6.11929 2 7.5V15.5C2 16.8807 3.11929 18 4.5 18H12.5C13.8807 18 15 16.8807 15 15.5V7.5C15 6.11929 13.8807 5 12.5 5H4.5ZM3 7.5C3 6.67157 3.67157 6 4.5 6H12.5C13.3284 6 14 6.67157 14 7.5V15.5C14 16.3284 13.3284 17 12.5 17H4.5C3.67157 17 3 16.3284 3 15.5V7.5Z"/></svg>
+        </button>
+        <button class="tool icon" data-action="deleteRows" type="button" title="Delete the selected rows" aria-label="Delete rows">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 4H11.5C11.5 3.17157 10.8284 2.5 10 2.5C9.17157 2.5 8.5 3.17157 8.5 4ZM7.5 4C7.5 2.61929 8.61929 1.5 10 1.5C11.3807 1.5 12.5 2.61929 12.5 4H17.5C17.7761 4 18 4.22386 18 4.5C18 4.77614 17.7761 5 17.5 5H16.4456L15.2521 15.3439C15.0774 16.8576 13.7957 18 12.2719 18H7.72813C6.20431 18 4.92256 16.8576 4.7479 15.3439L3.55437 5H2.5C2.22386 5 2 4.77614 2 4.5C2 4.22386 2.22386 4 2.5 4H7.5ZM5.74131 15.2292C5.85775 16.2384 6.71225 17 7.72813 17H12.2719C13.2878 17 14.1422 16.2384 14.2587 15.2292L15.439 5H4.56101L5.74131 15.2292ZM8.5 7.5C8.77614 7.5 9 7.72386 9 8V14C9 14.2761 8.77614 14.5 8.5 14.5C8.22386 14.5 8 14.2761 8 14V8C8 7.72386 8.22386 7.5 8.5 7.5ZM12 8C12 7.72386 11.7761 7.5 11.5 7.5C11.2239 7.5 11 7.72386 11 8V14C11 14.2761 11.2239 14.5 11.5 14.5C11.7761 14.5 12 14.2761 12 14V8Z"/></svg>
+        </button>
+        <div class="toolbar-sep"></div>
+        <button class="tool icon" data-action="addColumn" type="button" title="Add a column" aria-label="Add a column">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 4.5C2.5 3.67157 3.17157 3 4 3H8C8.82843 3 9.5 3.67157 9.5 4.5V15.5C9.5 16.3284 8.82843 17 8 17H4C3.17157 17 2.5 16.3284 2.5 15.5V4.5ZM3.5 4.5V15.5C3.5 15.7761 3.72386 16 4 16H8C8.27614 16 8.5 15.7761 8.5 15.5V4.5C8.5 4.22386 8.27614 4 8 4H4C3.72386 4 3.5 4.22386 3.5 4.5Z"/><path d="M14.5 6.5C14.5 6.22386 14.7239 6 15 6C15.2761 6 15.5 6.22386 15.5 6.5V9.5H18.5C18.7761 9.5 19 9.72386 19 10C19 10.2761 18.7761 10.5 18.5 10.5H15.5V13.5C15.5 13.7761 15.2761 14 15 14C14.7239 14 14.5 13.7761 14.5 13.5V10.5H11.5C11.2239 10.5 11 10.2761 11 10C11 9.72386 11.2239 9.5 11.5 9.5H14.5V6.5Z"/></svg>
+        </button>
+        <div class="toolbar-sep"></div>
+        <button class="tool icon" data-action="copy" type="button" title="Copy" aria-label="Copy">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 7H5C3.89543 7 3 7.89543 3 9V15C3 16.1046 3.89543 17 5 17H9C10.1046 17 11 16.1046 11 15H12C12 16.6569 10.6569 18 9 18H5C3.34315 18 2 16.6569 2 15V9C2 7.34315 3.34315 6 5 6H7V7ZM15 2C16.6569 2 18 3.34315 18 5V11C18 12.6569 16.6569 14 15 14H11C9.34315 14 8 12.6569 8 11V5C8 3.34315 9.34315 2 11 2H15ZM11 3C9.89543 3 9 3.89543 9 5V11C9 12.1046 9.89543 13 11 13H15C16.1046 13 17 12.1046 17 11V5C17 3.89543 16.1046 3 15 3H11Z"/></svg>
+        </button>
+        <button class="tool icon" data-action="cut" type="button" title="Cut" aria-label="Cut">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.91939 2.22774C5.769 1.99615 5.45933 1.93033 5.22774 2.08072C4.99615 2.23112 4.93033 2.54079 5.08072 2.77238L9.40382 9.42936L7.4809 12.3904C7.04398 12.1419 6.53857 12 6 12C4.34315 12 3 13.3431 3 15C3 16.6569 4.34315 18 6 18C7.65685 18 9 16.6569 9 15C9 14.2446 8.72078 13.5543 8.25991 13.0269L10 10.3474L11.7401 13.0269C11.2792 13.5543 11 14.2446 11 15C11 16.6569 12.3431 18 14 18C15.6569 18 17 16.6569 17 15C17 13.3431 15.6569 12 14 12C13.4614 12 12.956 12.1419 12.5191 12.3904L5.91939 2.22774ZM14 17C12.8954 17 12 16.1046 12 15C12 13.8954 12.8954 13 14 13C15.1046 13 16 13.8954 16 15C16 16.1046 15.1046 17 14 17ZM4 15C4 13.8954 4.89543 13 6 13C7.10457 13 8 13.8954 8 15C8 16.1046 7.10457 17 6 17C4.89543 17 4 16.1046 4 15ZM11.1924 8.51133L10.5962 7.59329L14.0806 2.22774C14.231 1.99615 14.5407 1.93033 14.7723 2.08072C15.0039 2.23112 15.0697 2.54079 14.9193 2.77238L11.1924 8.51133Z"/></svg>
+        </button>
+        <button class="tool icon" data-action="paste" type="button" title="Paste" aria-label="Paste">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 4H6.08535C6.29127 4.5826 6.84689 5 7.5 5H10.5C11.1531 5 11.7087 4.5826 11.9146 4H13.5C13.7761 4 14 4.22386 14 4.5V5.5C14 5.77614 14.2239 6 14.5 6C14.7761 6 15 5.77614 15 5.5V4.5C15 3.67157 14.3284 3 13.5 3H11.9146C11.7087 2.4174 11.1531 2 10.5 2H7.5C6.84689 2 6.29127 2.4174 6.08535 3H4.5C3.67157 3 3 3.67157 3 4.5V16.5C3 17.3284 3.67157 18 4.5 18H7.5C7.77614 18 8 17.7761 8 17.5C8 17.2239 7.77614 17 7.5 17H4.5C4.22386 17 4 16.7761 4 16.5V4.5C4 4.22386 4.22386 4 4.5 4ZM7.5 4C7.22386 4 7 3.77614 7 3.5C7 3.22386 7.22386 3 7.5 3H10.5C10.7761 3 11 3.22386 11 3.5C11 3.77614 10.7761 4 10.5 4H7.5ZM10.5 7C9.67157 7 9 7.67157 9 8.5V16.5C9 17.3284 9.67157 18 10.5 18H15.5C16.3284 18 17 17.3284 17 16.5V8.5C17 7.67157 16.3284 7 15.5 7H10.5ZM10 8.5C10 8.22386 10.2239 8 10.5 8H15.5C15.7761 8 16 8.22386 16 8.5V16.5C16 16.7761 15.7761 17 15.5 17H10.5C10.2239 17 10 16.7761 10 16.5V8.5Z"/></svg>
+        </button>
+        <button class="tool icon" data-action="pasteInsert" type="button" title="Insert paste (adds rows)" aria-label="Insert paste">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 17C7.22386 17 7 16.7761 7 16.5C7 16.2239 7.22386 16 7.5 16H14C15.1046 16 16 15.1046 16 14V6C16 4.89543 15.1046 4 14 4H7.5C7.22386 4 7 3.77614 7 3.5C7 3.22386 7.22386 3 7.5 3H14C15.6569 3 17 4.34315 17 6V14C17 15.6569 15.6569 17 14 17H7.5ZM7.64645 6.14645C7.84171 5.95118 8.15829 5.95118 8.35355 6.14645L11.8536 9.64645C12.0488 9.84171 12.0488 10.1583 11.8536 10.3536L8.35355 13.8536C8.15829 14.0488 7.84171 14.0488 7.64645 13.8536C7.45118 13.6583 7.45118 13.3417 7.64645 13.1464L10.2929 10.5H1.5C1.22386 10.5 1 10.2761 1 10C1 9.72386 1.22386 9.5 1.5 9.5H10.2929L7.64645 6.85355C7.45118 6.65829 7.45118 6.34171 7.64645 6.14645Z"/></svg>
+        </button>
+        <div class="toolbar-sep"></div>
+        <label class="tool fill" title="Background colour">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.99997 2.5C8.99997 2.22386 8.77611 2 8.49997 2C8.22383 2 7.99997 2.22386 7.99997 2.5V3.9996C7.79524 4.0718 7.60306 4.18978 7.43931 4.35352L2.35352 9.43931C1.76774 10.0251 1.76774 10.9748 2.35352 11.5606L6.68931 15.8964C7.2751 16.4822 8.22484 16.4822 8.81063 15.8964L13.8964 10.8106C14.4822 10.2248 14.4822 9.2751 13.8964 8.68931L9.56063 4.35352C9.39688 4.18978 9.2047 4.0718 8.99997 3.9996V2.5ZM7.99997 5.20708V6.5C7.99997 6.77614 8.22383 7 8.49997 7C8.77611 7 8.99997 6.77614 8.99997 6.5V5.20708L13.1893 9.39642C13.3529 9.56002 13.3794 9.80878 13.2689 10H3.20705L7.99997 5.20708ZM7.39642 15.1893L3.20711 11H12.2928L8.10352 15.1893C7.90826 15.3846 7.59168 15.3846 7.39642 15.1893ZM16.016 11.3922C15.7855 10.997 15.2145 10.997 14.984 11.3922L13.3316 14.2248C12.3554 15.8983 13.5626 18 15.5 18C17.4374 18 18.6445 15.8983 17.6683 14.2248L16.016 11.3922ZM14.1954 14.7287L15.5 12.4923L16.8045 14.7287C17.3919 15.7355 16.6656 17 15.5 17C14.3343 17 13.6081 15.7355 14.1954 14.7287Z"/></svg>
+          <input type="color" id="fillColor" value="#ffcc00">
+        </label>
+        <select class="tool" id="fillScope" title="Colour scope">
+          <option value="cell">Cell</option>
+          <option value="row">Row</option>
+          <option value="column">Column</option>
+        </select>
+        <button class="tool icon" data-action="applyFill" type="button" title="Apply the colour" aria-label="Apply colour">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.37371 10.1678C3.19025 9.96143 2.87421 9.94284 2.66782 10.1263C2.46143 10.3098 2.44284 10.6258 2.6263 10.8322L6.6263 15.3322C6.81743 15.5472 7.15013 15.557 7.35356 15.3536L17.8536 4.85355C18.0488 4.65829 18.0488 4.34171 17.8536 4.14645C17.6583 3.95118 17.3417 3.95118 17.1465 4.14645L7.02141 14.2715L3.37371 10.1678Z"/></svg>
+        </button>
+        <button class="tool icon" data-action="clearFill" type="button" title="Clear the colour" aria-label="Clear colour">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.08859 4.21569L4.14645 4.14645C4.32001 3.97288 4.58944 3.9536 4.78431 4.08859L4.85355 4.14645L10 9.293L15.1464 4.14645C15.32 3.97288 15.5894 3.9536 15.7843 4.08859L15.8536 4.14645C16.0271 4.32001 16.0464 4.58944 15.9114 4.78431L15.8536 4.85355L10.707 10L15.8536 15.1464C16.0271 15.32 16.0464 15.5894 15.9114 15.7843L15.8536 15.8536C15.68 16.0271 15.4106 16.0464 15.2157 15.9114L15.1464 15.8536L10 10.707L4.85355 15.8536C4.67999 16.0271 4.41056 16.0464 4.21569 15.9114L4.14645 15.8536C3.97288 15.68 3.9536 15.4106 4.08859 15.2157L4.14645 15.1464L9.293 10L4.14645 4.85355C3.97288 4.67999 3.9536 4.41056 4.08859 4.21569L4.14645 4.14645L4.08859 4.21569Z"/></svg>
+        </button>
+        <div class="toolbar-spacer"></div>
+        <button class="tool icon" data-action="settings" type="button" title="Settings (Ctrl+,)" aria-label="Settings">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="4.25" width="7" height="1.5" rx="0.75"/><rect x="12" y="4.25" width="6" height="1.5" rx="0.75"/><circle cx="10.5" cy="5" r="2"/><rect x="2" y="9.25" width="3" height="1.5" rx="0.75"/><rect x="8" y="9.25" width="10" height="1.5" rx="0.75"/><circle cx="6.5" cy="10" r="2"/><rect x="2" y="14.25" width="9" height="1.5" rx="0.75"/><rect x="14" y="14.25" width="4" height="1.5" rx="0.75"/><circle cx="12.5" cy="15" r="2"/></svg>
+        </button>
+      </div>
+
+      <div class="grid" id="grid">
+        <div class="grid-empty hidden" id="gridEmpty">
+          <p>This database has no tables yet.</p>
+          <button class="primary" id="gridAddTable" type="button">Add a table...</button>
+        </div>
+        <div class="grid-corner" id="gridCorner"></div>
+        <div class="grid-head-scroll" id="gridHeadScroll">
+          <div class="grid-head" id="gridHead"></div>
+        </div>
+        <div class="grid-gutter" id="gridGutter"></div>
+        <div class="grid-body" id="gridBody" tabindex="0">
+          <div class="grid-spacer" id="gridSpacer"></div>
+          <div class="grid-rows" id="gridRows"></div>
+        </div>
+      </div>
+
+      <div class="welcome" id="welcome">
+        <div class="welcome-inner">
+          <h1>PalaceDB</h1>
+          <p>Structured static database editor</p>
+          <button class="primary" id="welcomeOpen" type="button">Open a database...</button>
+          <p class="hint">or drop a <code>.cdb</code> file here</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="statusbar">
+    <span id="statusSheet">-</span>
+    <span class="sep"></span>
+    <span id="statusCursor">-</span>
+    <span class="sep"></span>
+    <span id="statusRows">-</span>
+    <span class="sep" id="statusTemplateSep" hidden></span>
+    <span id="statusTemplate" class="status-template" hidden></span>
+    <span class="sep" id="statusIssueSep" hidden></span>
+    <span id="statusIssue" class="status-issue" hidden></span>
+    <div class="statusbar-spacer"></div>
+    <span id="statusMode">Read only</span>
+  </div>
+
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<div class="context-menu" id="contextMenu" hidden></div>
+<div class="context-menu" id="subMenu" hidden></div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-title" id="modalTitle">Title</div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-actions">
+      <button class="tool" id="modalCancel" type="button">Cancel</button>
+      <button class="tool primary" id="modalOk" type="button">OK</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

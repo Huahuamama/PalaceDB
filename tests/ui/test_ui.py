@@ -1,0 +1,3746 @@
+"""End-to-end UI tests.
+
+Drives the real application through the WebView2 DevTools protocol: the app is
+started with PALACEDB_CDP set, a temporary copy of a sample database is opened and
+the checks interact with the actual DOM.
+
+Requirements: the app must be built first (dotnet build) and the following Python
+packages installed: pillow (not needed here), websocket-client.
+
+Usage:
+    python tests/ui/test_ui.py [path-to-cdb]
+"""
+import ctypes, json, os, shutil, subprocess, sys, time, urllib.request
+import base64
+import websocket
+
+ROOT = r"D:/Workplace/PalaceDB"
+EXE = os.path.join(ROOT, r"src\PalaceDB.App\bin\Debug\net8.0-windows\PalaceDB.exe")
+
+# Each run gets its own folder: deleting the previous one in bulk is both slow and
+# destructive-looking, and the artefacts are useful when a check fails.
+WORK = os.path.join(ROOT, ".ui-test-work", time.strftime("%Y%m%d-%H%M%S"))
+os.makedirs(WORK, exist_ok=True)
+print("work folder:", WORK)
+CDB = os.path.join(WORK, "TestData2.cdb")
+FIXTURES = os.path.join(ROOT, "tests", "fixtures")
+SOURCE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(FIXTURES, "TestData2.cdb")
+shutil.copy(SOURCE, CDB)
+
+# Keep the run out of the real user profile: settings and the WebView2 cache go here.
+DATA_DIR = os.path.join(WORK, "appdata")
+os.makedirs(DATA_DIR, exist_ok=True)
+os.environ["PALACEDB_DATA_DIR"] = DATA_DIR
+
+env = dict(os.environ, PALACEDB_CDP="9333", PALACEDB_BACKUP_SECONDS="2", PALACEDB_AUTOMATION="1")
+
+
+def set_clipboard(text):
+    """Puts unicode text on the Windows clipboard.
+
+    The paste path reads the real clipboard, so the suite has to write it from here;
+    a page cannot do that without a user gesture.
+    """
+    CF_UNICODETEXT = 13
+    GMEM_MOVEABLE = 0x0002
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    # Handles are pointers: without these declarations ctypes truncates them to int.
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_bool
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
+    data = text.encode("utf-16-le") + b"\x00\x00"
+    for _ in range(20):
+        if user32.OpenClipboard(0):
+            break
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("could not open the clipboard")
+
+    try:
+        user32.EmptyClipboard()
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        pointer = kernel32.GlobalLock(handle)
+        ctypes.memmove(pointer, data, len(data))
+        kernel32.GlobalUnlock(handle)
+        user32.SetClipboardData(CF_UNICODETEXT, handle)
+    finally:
+        user32.CloseClipboard()
+
+
+def read_clipboard():
+    """The text currently on the Windows clipboard, or None."""
+    CF_UNICODETEXT = 13
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.restype = ctypes.c_bool
+    user32.GetClipboardData.argtypes = [ctypes.c_uint]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+
+    for _ in range(20):
+        if user32.OpenClipboard(0):
+            break
+        time.sleep(0.1)
+    else:
+        return None
+
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return None
+        pointer = kernel32.GlobalLock(handle)
+        try:
+            return ctypes.wstring_at(pointer)
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
+def park_windows(pid, offset=-4000):
+    """Moves every top-level window of `pid` off the desktop.
+
+    The suite drives the real application, so without this the editor windows pop up
+    over whatever the user is doing. Off-screen windows keep rendering (unlike a
+    minimised one), so the DevTools checks still see a live page.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def collect(hwnd, _):
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+
+        user32.EnumWindows(collect, 0)
+        for hwnd in found:
+            # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, 0, offset, offset, 0, 0, 0x0001 | 0x0004 | 0x0010)
+        return len(found)
+    except Exception as error:  # pragma: no cover - best effort only
+        print("note: could not park windows:", error)
+        return 0
+
+
+def window_rect(pid):
+    """Geometry of the first visible top-level window of `pid`, or None."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def collect(hwnd, _):
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+
+        user32.EnumWindows(collect, 0)
+        if not found:
+            return None
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        box = RECT()
+        user32.GetWindowRect(found[0], ctypes.byref(box))
+        return (box.left, box.top, box.right - box.left, box.bottom - box.top)
+    except Exception as error:  # pragma: no cover - best effort only
+        print("note: could not read the window rect:", error)
+        return None
+
+
+def move_window(pid, x, y):
+    """Moves the window of `pid` to (x, y) without changing its size."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def collect(hwnd, _):
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+
+        user32.EnumWindows(collect, 0)
+        for hwnd in found:
+            # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, 0, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)
+        return len(found) > 0
+    except Exception as error:  # pragma: no cover - best effort only
+        print("note: could not move the window:", error)
+        return False
+
+
+def wait_rect(pid, timeout=3.0):
+    """The window rect once it is stable, so a pending move has landed."""
+    end = time.time() + timeout
+    last = window_rect(pid)
+    while time.time() < end:
+        time.sleep(0.2)
+        current = window_rect(pid)
+        if current == last:
+            return current
+        last = current
+    return last
+
+
+proc = subprocess.Popen([EXE, CDB], env=env)
+ws = None
+FIRST_TARGET = None
+for _ in range(60):
+    time.sleep(0.5)
+    park_windows(proc.pid)
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9333/json/list", timeout=2) as r:
+            targets = json.load(r)
+        pages = [t for t in targets if t.get("type") == "page"]
+        if pages:
+            FIRST_TARGET = pages[0]["webSocketDebuggerUrl"]
+            ws = websocket.create_connection(FIRST_TARGET, timeout=15)
+            break
+    except Exception:
+        continue
+
+if ws is None:
+    print("FAIL: no CDP target"); proc.terminate(); sys.exit(1)
+
+counter = [0]
+def evaluate(expr, await_promise=False, sock=None):
+    sock = sock or ws
+    counter[0] += 1
+    sock.send(json.dumps({
+        "id": counter[0], "method": "Runtime.evaluate",
+        "params": {"expression": expr, "returnByValue": True, "awaitPromise": await_promise},
+    }))
+    while True:
+        msg = json.loads(sock.recv())
+        if msg.get("id") == counter[0]:
+            res = msg.get("result", {})
+            if "exceptionDetails" in res:
+                details = res["exceptionDetails"]
+                description = (details.get("exception") or {}).get("description") or details.get("text")
+                raise RuntimeError(str(description) + " :: " + expr[:200])
+            return res.get("result", {}).get("value")
+
+def wait_for_file(path, timeout=15, should_exist=True):
+    end = time.time() + timeout
+    while time.time() < end:
+        if os.path.exists(path) == should_exist:
+            return True
+        time.sleep(0.3)
+    return False
+
+def wait_for(expr, timeout=20):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if evaluate(expr):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.25)
+    return False
+
+results = []
+def check(name, ok, detail=""):
+    results.append((name, ok, detail))
+    print(("PASS " if ok else "FAIL ") + name + ("" if ok else "  -> " + str(detail)))
+
+# --- wait for the document
+ok = wait_for("!!(window.__palacedb && __palacedb.state.document)")
+check("document loaded", ok, evaluate("document.title"))
+print("title:", evaluate("document.title"))
+print("tables:", evaluate("__palacedb.state.document.sheets.map(s=>s.name).join(',')"))
+print("columns:", evaluate("__palacedb.grid.columns.map(c=>c.name+':'+c.type).join(',')"))
+
+# --- rows arrive
+ok = wait_for("__palacedb.grid.cache.size > 0")
+check("rows rendered from host", ok, evaluate("__palacedb.grid.cache.size"))
+
+# The bundled sample tables name their identifier and text columns differently, so the
+# checks that touch them look the columns up instead of hard coding a name.
+ID_NAME = evaluate("(() => { const c = __palacedb.grid.columns.find(c => c.type === 'Id'); return c ? c.name : 'Id'; })()")
+TEXT_NAME = evaluate("(() => { const c = __palacedb.grid.columns.find(c => c.type === 'Text'); return c ? c.name : 'Des'; })()")
+evaluate("window.__testText = %s" % json.dumps(TEXT_NAME))
+
+# --- text edit
+evaluate("__palacedb.grid.moveCursor(0,1)")
+evaluate("__palacedb.grid.onEditRequest(0,1,'')")
+check("editor opened", evaluate("!!document.querySelector('.editor-input')"))
+evaluate("""(() => {
+  const i = document.querySelector('.editor-input');
+  i.value = 'EDITED_BY_TEST';
+  i.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+  return true;
+})()""")
+time.sleep(0.6)
+val = evaluate("__palacedb.grid.cellValue(0,1) && __palacedb.grid.cellValue(0,1).t")
+check("text edit applied", val == "EDITED_BY_TEST", val)
+check("document dirty", evaluate("__palacedb.state.document.dirty") is True)
+
+# --- undo via keyboard
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+time.sleep(0.8)
+wait_for("__palacedb.grid.cellValue(0,1) !== undefined")
+val = evaluate("__palacedb.grid.cellValue(0,1) && __palacedb.grid.cellValue(0,1).t")
+check("undo reverted the edit", val != "EDITED_BY_TEST" and val is not None, val)
+print("after undo:", val)
+
+# --- redo
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'y', ctrlKey:true, bubbles:true}))")
+time.sleep(0.8)
+wait_for("__palacedb.grid.cellValue(0,1) !== undefined")
+val = evaluate("__palacedb.grid.cellValue(0,1) && __palacedb.grid.cellValue(0,1).t")
+check("redo reapplied the edit", val == "EDITED_BY_TEST", val)
+
+# --- multi-line text cells
+# A Text column gets a growing textarea: Shift+Enter inserts a break, a bare
+# Enter commits, and the grid shows the break as a visible marker.
+ml_row = 1
+ml_col = evaluate("__palacedb.grid.columns.findIndex(c=>c.type==='Text')")
+if ml_col >= 0:
+    evaluate(f"__palacedb.grid.moveCursor({ml_row},{ml_col})")
+    evaluate(f"__palacedb.grid.onEditRequest({ml_row},{ml_col},'')")
+    tag = evaluate("(()=>{const e=document.querySelector('.editor-input');return e?e.tagName:null})()")
+    check("text editor is a textarea", tag == "TEXTAREA", tag)
+
+    # Shift+Enter must not commit, so the editor stays open.
+    evaluate("""(() => {
+      const e = document.querySelector('.editor-input');
+      e.value = 'LINE_ONE';
+      e.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', shiftKey:true, bubbles:true}));
+      return true;
+    })()""")
+    time.sleep(0.3)
+    still_open = evaluate("!!document.querySelector('.editor-input')")
+    check("shift+enter keeps the editor open", still_open is True, still_open)
+
+    evaluate("""(() => {
+      const e = document.querySelector('.editor-input');
+      e.value = 'LINE_ONE\\nLINE_TWO';
+      e.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+      return true;
+    })()""")
+    time.sleep(0.8)
+    wait_for(f"__palacedb.grid.cellValue({ml_row},{ml_col}) !== undefined")
+    ml_val = evaluate(f"__palacedb.grid.cellValue({ml_row},{ml_col}).t")
+    check("multi-line value committed", ml_val == "LINE_ONE\nLINE_TWO", repr(ml_val))
+
+    rendered = evaluate(
+        f"""(() => {{
+          const c = document.querySelector('.cell[data-row="{ml_row}"][data-col="{ml_col}"]');
+          if (!c) return null;
+          return {{text: c.textContent, cls: c.classList.contains('multiline'), title: c.title}};
+        }})()""")
+    check("cell keeps the real line break",
+          rendered and (rendered.get("text") or "") == "LINE_ONE\nLINE_TWO", rendered)
+    check("cell marked as multiline", rendered and rendered.get("cls") is True, rendered)
+    check("cell wraps instead of overflowing",
+          evaluate(f"""(() => {{
+            const c = document.querySelector('.cell[data-row="{ml_row}"][data-col="{ml_col}"]');
+            return c ? getComputedStyle(c).whiteSpace : null;
+          }})()""") == "pre-wrap")
+    check("cell tooltip holds the raw text",
+          rendered and rendered.get("title") == "LINE_ONE\nLINE_TWO", rendered)
+
+    # Undo leaves the cell single-line again.
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true}))")
+    time.sleep(0.8)
+    wait_for(f"__palacedb.grid.cellValue({ml_row},{ml_col}) !== undefined")
+    ml_after = evaluate(f"__palacedb.grid.cellValue({ml_row},{ml_col}).t")
+    check("multi-line undo restored the old text",
+          ml_after is not None and "LINE_ONE" not in ml_after, repr(ml_after))
+
+# --- bool toggle
+col = evaluate("__palacedb.grid.columns.findIndex(c=>c.type==='Bool')")
+if col >= 0:
+    before = evaluate(f"__palacedb.grid.cellValue(0,{col}).t")
+    evaluate(f"__palacedb.grid.onToggleRequest(0,{col})")
+    time.sleep(0.6)
+    after = evaluate(f"__palacedb.grid.cellValue(0,{col}).t")
+    check("bool toggle", before != after, f"{before} -> {after}")
+
+# --- enum dropdown
+col = evaluate("__palacedb.grid.columns.findIndex(c=>c.type==='Enum')")
+if col >= 0:
+    evaluate(f"__palacedb.grid.onEditRequest(0,{col})")
+    time.sleep(0.3)
+    n = evaluate("document.querySelectorAll('.cell-dropdown .dropdown-item').length")
+    check("enum dropdown opened", n and n > 0, n)
+    evaluate("""(() => {
+      const items = document.querySelectorAll('.cell-dropdown .dropdown-item');
+      if (items.length) items[items.length-1].dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+      return true;
+    })()""")
+    time.sleep(0.6)
+    check("enum selection applied", True, evaluate(f"__palacedb.grid.cellValue(0,{col}).t"))
+
+
+# --- multi-cell selection
+evaluate("__palacedb.grid.moveCursor(0,1)")
+evaluate("__palacedb.grid.moveCursor(2,2,true)")
+sel = evaluate("(()=>{const b=__palacedb.grid.selectionBounds();return b.bottom-b.top+1})()")
+selcols = evaluate("(()=>{const b=__palacedb.grid.selectionBounds();return b.right-b.left+1})()")
+check("drag selection spans 3 rows", sel == 3, sel)
+check("drag selection spans 2 columns", selcols == 2, selcols)
+
+# --- copy then paste over another block
+evaluate("__palacedb.grid.moveCursor(0,1)")
+evaluate("__palacedb.grid.moveCursor(2,2,true)")
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'c',ctrlKey:true,bubbles:true}))")
+time.sleep(0.5)
+src = evaluate("__palacedb.grid.cellValue(0,1).t")
+# The sample tables differ in length, so the paste lands where there is room for it.
+target_row = evaluate("Math.max(0, Math.min(10, __palacedb.grid.rowCount - 3))")
+evaluate("__palacedb.grid.moveCursor(%d,1)" % target_row)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'v',ctrlKey:true,bubbles:true}))")
+time.sleep(0.8)
+wait_for("__palacedb.grid.cellValue(%d,1) !== undefined" % target_row)
+pasted = evaluate("__palacedb.grid.cellValue(%d,1).t" % target_row)
+check("paste overwrote the target block", pasted == src, f"{src!r} -> {pasted!r}")
+
+# --- undo the paste
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true}))")
+time.sleep(0.8)
+wait_for("__palacedb.grid.cellValue(%d,1) !== undefined" % target_row)
+after_undo = evaluate("__palacedb.grid.cellValue(%d,1).t" % target_row)
+check("paste undo restored the previous value", after_undo != src, after_undo)
+
+# --- row operations
+# The toolbar button appends, so the cursor is parked on the first row first: a new row
+# belongs at the end of the table, not above whatever the cursor happens to be on.
+evaluate("__palacedb.grid.moveCursor(0, 0)")
+rows_before = evaluate("__palacedb.grid.rowCount")
+evaluate("__palacedb.run('addRow')")
+time.sleep(0.8)
+wait_for(f"__palacedb.grid.rowCount === {rows_before + 1}")
+rows_after = evaluate("__palacedb.grid.rowCount")
+check("add row increases the count", rows_after == rows_before + 1, f"{rows_before} -> {rows_after}")
+check("the new row is the last one, not the one above the cursor",
+      evaluate("__palacedb.grid.cursor.row") == rows_after - 1,
+      (rows_before, evaluate("__palacedb.grid.cursor.row")))
+
+evaluate("__palacedb.grid.moveCursor(0,0)")
+evaluate("__palacedb.run('deleteRows')")
+time.sleep(0.8)
+wait_for(f"__palacedb.grid.rowCount === {rows_before}")
+rows_del = evaluate("__palacedb.grid.rowCount")
+check("delete row decreases the count", rows_del == rows_before, f"{rows_after} -> {rows_del}")
+cursor_after_delete = evaluate("__palacedb.grid.cursor.row")
+check("cursor stays near the deleted row", cursor_after_delete == 0, cursor_after_delete)
+
+# --- insert paste
+rows_before2 = evaluate("__palacedb.grid.rowCount")
+evaluate("__palacedb.grid.moveCursor(3,0)")
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'V',shiftKey:true,ctrlKey:true,bubbles:true}))")
+time.sleep(0.8)
+wait_for(f"__palacedb.grid.rowCount > {rows_before2}")
+rows_insert = evaluate("__palacedb.grid.rowCount")
+check("insert paste adds rows", rows_insert > rows_before2, f"{rows_before2} -> {rows_insert}")
+
+
+# --- column width is stored in the metadata side-car
+evaluate("__palacedb.grid.columns[1].width = 210; __palacedb.grid.onColumnResized(__palacedb.grid.sheet, __palacedb.grid.columns[1].name, 210)")
+time.sleep(0.9)
+meta_path = CDB + ".meta.json"
+has_meta = os.path.exists(meta_path)
+check("metadata side-car created", has_meta, meta_path)
+meta_text = open(meta_path, encoding="utf-8").read() if has_meta else ""
+check("column width written to metadata", '"width": 210' in meta_text, meta_text[:160].replace("\n", " "))
+
+# --- background colour, priority and persistence
+evaluate("__palacedb.grid.moveCursor(0,1)")
+evaluate("__palacedb.grid.moveCursor(1,1,true)")
+evaluate("__palacedb.run('applyFill')")
+time.sleep(1.0)
+wait_for("__palacedb.grid.cellValue(0,1) !== undefined")
+evaluate("__palacedb.grid.moveCursor(6,6)")
+time.sleep(0.5)
+bg = evaluate("(()=>{const c=document.querySelector('.cell[data-row=\"0\"][data-col=\"1\"]');return c?c.style.backgroundColor:null})()")
+check("cell background rendered", bg not in (None, "", "rgba(0, 0, 0, 0)"), bg)
+
+meta_text = open(meta_path, encoding="utf-8").read() if os.path.exists(meta_path) else ""
+check("background stored in metadata", "ffcc00" in meta_text, meta_text[-300:].replace("\n", " "))
+
+cdb_text = open(CDB, encoding="utf-8", errors="replace").read()
+check("colours are not written into the .cdb", "ffcc00" not in cdb_text and '"width"' not in cdb_text)
+
+# --- clearing a colour
+evaluate("__palacedb.grid.moveCursor(0,1)")
+evaluate("__palacedb.grid.moveCursor(1,1,true)")
+evaluate("__palacedb.run('clearFill')")
+time.sleep(1.0)
+wait_for("__palacedb.grid.cellValue(0,1) !== undefined")
+evaluate("__palacedb.grid.moveCursor(6,6)")
+time.sleep(0.5)
+bg2 = evaluate("(()=>{const c=document.querySelector('.cell[data-row=\"0\"][data-col=\"1\"]');return c?c.style.backgroundColor:null})()")
+check("colour cleared", bg2 in (None, "", "rgba(0, 0, 0, 0)"), bg2)
+
+# --- save
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.0)
+check("saved file exists", os.path.exists(CDB))
+check("dirty cleared after save", evaluate("__palacedb.state.document.dirty") is False)
+
+# --- fill the selection with one value (Ctrl+Enter in the editor)
+# A text column, chosen by type: the sample is a scratch file whose column order changes.
+FILL_COL = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Text')")
+check("the table has a text column to fill", FILL_COL >= 0, FILL_COL)
+evaluate("__palacedb.grid.moveCursor(0,%d)" % FILL_COL)
+evaluate("__palacedb.grid.moveCursor(2,%d,true)" % FILL_COL)
+time.sleep(0.3)
+evaluate("__palacedb.send('fillCells', {sheet: __palacedb.state.currentSheet, rows: __palacedb.grid.selectedRowIndices(), columns: __palacedb.grid.selectedColumnNames(), text: 'FILLED'})")
+ok = wait_for("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t === 'FILLED'" % (FILL_COL, FILL_COL))
+check("selection filled with one value", ok,
+      evaluate("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t" % (FILL_COL, FILL_COL)))
+check("fill covers the whole selection",
+      evaluate("__palacedb.grid.cellValue(2,%d).t === 'FILLED' && __palacedb.grid.cellValue(0,%d).t === 'FILLED'"
+               % (FILL_COL, FILL_COL)))
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t !== 'FILLED'"
+              % (FILL_COL, FILL_COL))
+check("fill undone in one step", ok,
+      evaluate("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t" % (FILL_COL, FILL_COL)))
+check("document clean after fill undo", wait_for("__palacedb.state.document.dirty === false", 6))
+
+# --- column schema editing
+columns_before = evaluate("__palacedb.grid.columns.length")
+evaluate("__palacedb.send('addColumn', {sheet: __palacedb.state.currentSheet, index: 1, name: 'Note', type: '1'})")
+ok = wait_for("__palacedb.grid.columns.length === %d" % (columns_before + 1))
+check("column added", ok, evaluate("__palacedb.grid.columns.map(c=>c.name).join(',')"))
+check("new column is second", evaluate("__palacedb.grid.columns[1].name") == "Note")
+
+evaluate("__palacedb.send('renameColumn', {sheet: __palacedb.state.currentSheet, column: 'Note', name: 'Memo'})")
+ok = wait_for("__palacedb.grid.columns.some(c => c.name === 'Memo')")
+check("column renamed", ok, evaluate("__palacedb.grid.columns.map(c=>c.name).join(',')"))
+
+evaluate("__palacedb.send('changeColumnType', {sheet: __palacedb.state.currentSheet, column: 'Memo', type: '3'})")
+ok = wait_for("__palacedb.grid.columns[1] && __palacedb.grid.columns[1].type === 'Int'")
+check("column type changed", ok, evaluate("__palacedb.grid.columns[1].typeStr"))
+
+evaluate("__palacedb.send('undo')")
+evaluate("__palacedb.send('undo')")
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.columns.length === %d" % columns_before)
+check("column edits undone", ok, evaluate("__palacedb.grid.columns.map(c=>c.name).join(',')"))
+
+# --- table management
+tables_before = evaluate("__palacedb.state.document.sheets.length")
+evaluate("__palacedb.send('addSheet', {name:'Quest'})")
+ok = wait_for("__palacedb.state.document.sheets.length === %d" % (tables_before + 1))
+check("table added", ok, evaluate("__palacedb.state.document.sheets.map(s=>s.name).join(',')"))
+check("new table selected", evaluate("__palacedb.state.currentSheet") == "Quest")
+check("new table has an id column", evaluate("__palacedb.grid.columns.map(c=>c.name+':'+c.type).join(',')") == "id:Id")
+
+evaluate("__palacedb.send('renameSheet', {sheet:'Quest', name:'Mission'})")
+ok = wait_for("__palacedb.state.document.sheets.some(s => s.name === 'Mission')")
+check("table renamed", ok)
+
+evaluate("__palacedb.send('deleteSheet', {sheet:'Mission'})")
+ok = wait_for("__palacedb.state.document.sheets.length === %d" % tables_before)
+check("table deleted", ok, evaluate("__palacedb.state.document.sheets.map(s=>s.name).join(',')"))
+
+evaluate("__palacedb.send('undo')")
+evaluate("__palacedb.send('undo')")
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.state.document.sheets.length === %d" % tables_before)
+check("table edits undone", ok)
+check("document clean after undo", wait_for("__palacedb.state.document.dirty === false", 6))
+
+# --- separators
+# Samples differ here: one of them already carries a separator above row 3. The row is
+# cleared first so the checks below start from a known state (and so the group test further
+# down can build its own titled separator on the same row).
+if evaluate("__palacedb.grid.separatorTitles.has(2)"):
+    evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 2})")
+    ok = wait_for("!__palacedb.grid.separatorTitles.has(2)")
+    time.sleep(0.6)
+    check("the sample's own separator on row 3 is cleared for the test", ok,
+          evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"))
+
+sep_before = evaluate("__palacedb.grid.separatorTitles.size")
+evaluate("__palacedb.grid.moveCursor(2,0)")
+time.sleep(0.3)
+evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 2})")
+ok = wait_for("__palacedb.grid.separatorTitles.has(2)")
+time.sleep(0.6)
+check("separator added", ok, evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"))
+check("the separator is drawn as a strip of its own",
+      evaluate("!!document.querySelector('.sep-band[data-sep=\"2\"]')"),
+      evaluate("Array.from(document.querySelectorAll('.sep-band')).map(b => b.dataset.sep).join(',')"))
+check("the strip is one row tall",
+      evaluate("Math.round(document.querySelector('.sep-band[data-sep=\"2\"]').getBoundingClientRect().height)") == 38,
+      evaluate("Math.round(document.querySelector('.sep-band[data-sep=\"2\"]').getBoundingClientRect().height)"))
+check("the strip pushes its row down instead of covering it",
+      evaluate("""(() => {
+        const band = document.querySelector('.sep-band[data-sep="2"]').getBoundingClientRect();
+        const row = document.querySelector('.grid-row[data-row="2"]').getBoundingClientRect();
+        return Math.round(row.top - band.bottom) === 0 && Math.round(band.height) === 38;
+      })()""") is True)
+
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: __palacedb.state.currentSheet, row: 2, title: 'Chapter'})")
+ok = wait_for("__palacedb.grid.separatorTitles.get(2) === 'Chapter'")
+check("separator title set", ok, evaluate("__palacedb.grid.separatorTitles.get(2)"))
+check("separator tooltip shows the title",
+      evaluate("document.querySelector('.sep-band[data-sep=\"2\"]').title") == "Separator: Chapter")
+check("the title is written in the strip",
+      evaluate("(document.querySelector('.sep-band[data-sep=\"2\"] .sep-label') || {}).textContent") == "Chapter")
+
+# The row a separator introduces keeps its values and still grows for a wrapped one: the
+# strip takes a row of its own instead of hiding what was there.
+check("the row of a separator still shows its value",
+      evaluate("""(() => {
+        const row = document.querySelector('.grid-row[data-row="2"]');
+        const value = row && row.querySelector('.cell-value');
+        return !!value && getComputedStyle(value).visibility === 'visible'
+               && value.textContent.trim().length > 0;
+      })()"""),
+      evaluate("""(() => {
+        const row = document.querySelector('.grid-row[data-row="2"]');
+        const value = row && row.querySelector('.cell-value');
+        return value ? value.textContent.trim().slice(0, 20) : 'missing';
+      })()"""))
+
+text_column = evaluate(
+    "(__palacedb.grid.columns.find(c => c.type === 'Text') || __palacedb.grid.columns[0]).name")
+LONG_SEP = "A value that wraps onto several lines " * 8
+evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, row: 2, column: %s, text: %s})"
+         % (json.dumps(text_column), json.dumps(LONG_SEP)))
+ok = wait_for("__palacedb.grid.rowHeights.has(2)", 6)
+check("a separator row grows for a wrapped value like any other row", ok,
+      evaluate("__palacedb.grid.rowHeights.get(2)"))
+
+SEP_GEOMETRY = """
+(() => {
+  const row = (n) => document.querySelector('.grid-row[data-row="' + n + '"]');
+  const band = document.querySelector('.sep-band[data-sep="2"]');
+  const a = row(2).getBoundingClientRect();
+  const b = row(3).getBoundingClientRect();
+  const s = band.getBoundingClientRect();
+  const value = row(3) && row(3).querySelector('.cell-value');
+  return JSON.stringify({
+    height: Math.round(a.height),
+    bandHeight: Math.round(s.height),
+    bandGap: Math.round(a.top - s.bottom),
+    gap: Math.round(b.top - a.bottom),
+    below: value ? value.textContent.trim().slice(0, 20) : null,
+  });
+})()
+"""
+geometry = json.loads(evaluate(SEP_GEOMETRY))
+check("the tall separator row keeps its wrapped text", geometry["height"] > 38, geometry["height"])
+check("the strip stays one row tall above a tall row", geometry["bandHeight"] == 38, geometry["bandHeight"])
+check("the strip stays attached to the row it introduces", geometry["bandGap"] == 0, geometry["bandGap"])
+check("the row below a separator is still attached", geometry["gap"] == 0, geometry["gap"])
+check("the row below a separator still shows its text",
+      bool(geometry["below"]), geometry["below"])
+
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.separatorTitles.has(2) && __palacedb.grid.separatorTitles.get(2) === 'Chapter'"
+              " && !__palacedb.grid.rowHeights.has(2)", 8)
+check("separator growth test undone", ok)
+
+evaluate("__palacedb.send('undo')")
+time.sleep(0.6)
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.separatorTitles.size === %d" % sep_before)
+check("separator edits undone", ok, evaluate("__palacedb.grid.separatorTitles.size"))
+
+# --- table order (S04) and generated index / group fields (S05 / S06)
+def open_table_menu(index):
+    evaluate("__palacedb.elements.tableList.querySelectorAll('.table-item')[%d]"
+             ".dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:120, clientY:220}))"
+             % index)
+    time.sleep(0.45)
+
+def click_menu_item(text):
+    return evaluate("""(() => {
+      const b = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+        .find(x => (x.textContent || '').indexOf(%s) === 0);
+      if (!b || b.disabled) return false;
+      b.click();
+      return true;
+    })()""" % json.dumps(text))
+
+order_before = evaluate("__palacedb.state.document.sheets.map(s=>s.name).join(',')")
+first_name = evaluate("__palacedb.state.document.sheets[0].name")
+
+open_table_menu(0)
+labels = evaluate("Array.from(document.querySelectorAll('#contextMenu .context-label'))"
+                  ".map(s=>s.textContent).join('|')")
+check("table menu lists order and generated fields",
+      "Move Table Up" in labels and "Move Table Down" in labels and "Add Index" in labels and "Add Group" in labels,
+      labels)
+check("the first table cannot move up",
+      evaluate("Array.from(document.querySelectorAll('#contextMenu .context-item'))"
+               ".find(b => b.textContent.indexOf('Move Table Up') === 0).disabled") is True)
+
+click_menu_item('Move Table Down')
+ok = wait_for("__palacedb.state.document.sheets[0].name !== %s" % json.dumps(first_name))
+check("table moved down", ok, evaluate("__palacedb.state.document.sheets.map(s=>s.name).join(',')"))
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.state.document.sheets.map(s=>s.name).join(',') === %s" % json.dumps(order_before))
+check("table move undone", ok, evaluate("__palacedb.state.document.sheets.map(s=>s.name).join(',')"))
+
+open_table_menu(0)
+click_menu_item('Add Index')
+ok = wait_for("__palacedb.state.document.sheets[0].hasIndex === true")
+check("index switched on", ok)
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.2)
+saved = json.load(open(CDB, encoding="utf-8"))
+saved_sheet = saved["sheets"][0]
+check("index written on every row",
+      all("index" in row for row in saved_sheet["lines"])
+      and [row["index"] for row in saved_sheet["lines"]] == list(range(len(saved_sheet["lines"]))),
+      [row.get("index") for row in saved_sheet["lines"][:5]])
+check("hasIndex stored in props", saved_sheet.get("props", {}).get("hasIndex") is True,
+      saved_sheet.get("props"))
+
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.state.document.sheets[0].hasIndex === false")
+check("index switched off by undo", ok)
+
+# group needs a titled separator to have anything to number
+sheet_now = evaluate("__palacedb.state.currentSheet")
+evaluate("__palacedb.send('toggleSeparator', {sheet: %s, row: 2})" % json.dumps(sheet_now))
+ok = wait_for("__palacedb.grid.separatorTitles.has(2)")
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: %s, row: 2, title: 'Chapter'})" % json.dumps(sheet_now))
+ok = ok and wait_for("__palacedb.grid.separatorTitles.get(2) === 'Chapter'")
+check("titled separator prepared for the group test", ok)
+
+open_table_menu(0)
+click_menu_item('Add Group')
+ok = wait_for("__palacedb.state.document.sheets[0].hasGroup === true")
+check("group switched on", ok)
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.2)
+saved = json.load(open(CDB, encoding="utf-8"))
+saved_sheet = saved["sheets"][0]
+groups = [row.get("group") for row in saved_sheet["lines"]]
+check("group written on every row", all(g is not None for g in groups), groups[:6])
+check("group increments at the titled separator",
+      groups[0] == 0 and groups[1] == 0 and groups[2] == 1 and groups[3] == 1, groups[:6])
+check("hasGroup stored in props", saved_sheet.get("props", {}).get("hasGroup") is True,
+      saved_sheet.get("props"))
+
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.state.document.sheets[0].hasGroup === false")
+check("group switched off by undo", ok)
+evaluate("__palacedb.send('undo')")
+time.sleep(0.5)
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.separatorTitles.size === %d" % sep_before)
+check("group test cleaned up", ok, evaluate("__palacedb.grid.separatorTitles.size"))
+
+# --- rows must actually reach the file
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.0)
+check("document clean after the generated field tests",
+      wait_for("__palacedb.state.document.dirty === false", 6))
+
+saved = json.load(open(CDB, encoding="utf-8"))
+check("saved file matches the row count on screen",
+      len(saved["sheets"][0]["lines"]) == evaluate("__palacedb.grid.rowCount"),
+      (len(saved["sheets"][0]["lines"]), evaluate("__palacedb.grid.rowCount")))
+check("generated fields removed from the file after undo",
+      all("index" not in row and "group" not in row for row in saved["sheets"][0]["lines"]))
+
+# --- bulk column conversion (C07)
+def open_header_menu(col_index):
+    evaluate("""(() => {
+      const cell = document.querySelector('.head-cell[data-col="%d"]');
+      if (!cell) return false;
+      cell.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:320, clientY:130}));
+      return true;
+    })()""" % col_index)
+    time.sleep(0.35)
+
+def open_convert(col_index):
+    """Right-clicks a header and hovers the Convert entry; returns the submenu labels."""
+    open_header_menu(col_index)
+    evaluate("""(() => {
+      const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+        .find(b => (b.textContent || '').indexOf('Convert') === 0);
+      if (!item) return false;
+      item.dispatchEvent(new MouseEvent('mouseenter'));
+      return true;
+    })()""")
+    time.sleep(0.3)
+    return evaluate("Array.from(document.querySelectorAll('#subMenu .context-item .context-label'))"
+                    ".map(s=>s.textContent).join('|')")
+
+def pick_submenu(text):
+    evaluate("""(() => {
+      const item = Array.from(document.querySelectorAll('#subMenu .context-item'))
+        .find(b => (b.textContent || '').indexOf(%s) === 0);
+      if (!item) return false;
+      item.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+      return true;
+    })()""" % json.dumps(text))
+
+def cell_text(row, col):
+    return evaluate("__palacedb.grid.cellValue(%d,%d) && __palacedb.grid.cellValue(%d,%d).t"
+                    % (row, col, row, col))
+
+id_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Id')")
+labels = open_convert(id_col)
+check("convert submenu opens for an ID column",
+      labels == 'lowercase|UPPERCASE|UpperIdent|lowerIdent', labels)
+
+id_before = cell_text(0, id_col) or ''
+pick_submenu('UPPERCASE')
+ok = wait_for("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t === %s"
+              % (id_col, id_col, json.dumps(id_before.upper())))
+check("UPPERCASE rewrote the ID column", ok, "%r -> %r" % (id_before, cell_text(0, id_col)))
+check("menus closed after picking a conversion",
+      evaluate("document.getElementById('contextMenu').hidden && document.getElementById('subMenu').hidden"))
+
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t === %s"
+              % (id_col, id_col, json.dumps(id_before)))
+check("ID conversion undone in one step", ok, cell_text(0, id_col))
+check("document clean after conversion undo", wait_for("__palacedb.state.document.dirty === false", 6))
+
+int_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Int')")
+labels = open_convert(int_col)
+check("convert submenu lists the numeric rules for an Int column",
+      labels == '* 10|/ 10|+ 1|- 1', labels)
+
+num_before = cell_text(0, int_col) or '0'
+pick_submenu('+ 1')
+ok = wait_for("__palacedb.grid.cellValue(0,%d) && Number(__palacedb.grid.cellValue(0,%d).t) === %d"
+              % (int_col, int_col, int(num_before) + 1))
+check("+ 1 shifted the Int column", ok, "%s -> %s" % (num_before, cell_text(0, int_col)))
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.cellValue(0,%d) && Number(__palacedb.grid.cellValue(0,%d).t) === %d"
+              % (int_col, int_col, int(num_before)))
+check("numeric conversion undone", ok, cell_text(0, int_col))
+
+flags_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Flags' || c.type === 'Enum')")
+flags_before = evaluate("(__palacedb.grid.columns[%d].values || []).join(',')" % flags_col)
+labels = open_convert(flags_col)
+check("convert submenu offered for a Flags/Enum column",
+      labels == 'lowercase|UPPERCASE|UpperIdent|lowerIdent', labels)
+
+pick_submenu('UPPERCASE')
+ok = wait_for("( __palacedb.grid.columns[%d].values || []).join(',') === %s"
+              % (flags_col, json.dumps(flags_before.upper())))
+check("UPPERCASE renamed the Flags values", ok,
+      evaluate("(__palacedb.grid.columns[%d].values || []).join(',')" % flags_col))
+evaluate("__palacedb.send('undo')")
+ok = wait_for("( __palacedb.grid.columns[%d].values || []).join(',') === %s"
+              % (flags_col, json.dumps(flags_before)))
+check("Flags value rename undone", ok,
+      evaluate("(__palacedb.grid.columns[%d].values || []).join(',')" % flags_col))
+
+bool_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Bool')")
+open_header_menu(bool_col)
+has_convert = evaluate("Array.from(document.querySelectorAll('#contextMenu .context-item'))"
+                       ".some(b => (b.textContent || '').indexOf('Convert') === 0)")
+check("no convert submenu for a Bool column", has_convert is False)
+evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))")
+time.sleep(0.3)
+
+# --- per table cursor memory
+evaluate("__palacedb.grid.moveCursor(4,2)")
+time.sleep(0.4)
+evaluate("__palacedb.elements.tableList.querySelectorAll('.table-item')[1].click()")
+time.sleep(0.9)
+check("second table starts at the first cell", evaluate("__palacedb.grid.cursor.row === 0 && __palacedb.grid.cursor.col === 0"))
+evaluate("__palacedb.elements.tableList.querySelectorAll('.table-item')[0].click()")
+time.sleep(0.9)
+check("cursor restored when switching back",
+      evaluate("__palacedb.grid.cursor.row === 4 && __palacedb.grid.cursor.col === 2"),
+      evaluate("JSON.stringify(__palacedb.grid.cursor)"))
+
+# --- context menu
+evaluate("""
+(() => {
+  const cell = document.querySelector('.cell[data-row="2"][data-col="2"]');
+  cell.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:200, clientY:200}));
+})()
+""")
+time.sleep(0.4)
+check("row context menu opens", evaluate("!document.getElementById('contextMenu').hidden"))
+labels = evaluate("Array.from(document.querySelectorAll('#contextMenu .context-item span')).map(s=>s.textContent).join('|')")
+check("context menu lists row actions", "Insert Row Above" in labels and "Delete Row" in labels, labels)
+evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))")
+time.sleep(0.3)
+check("context menu closes on Escape", evaluate("document.getElementById('contextMenu').hidden"))
+
+# --- theme and layout toggles
+check("light theme is the default", evaluate("__palacedb.isDark()") is False)
+evaluate("__palacedb.toggleTheme()")
+time.sleep(0.3)
+check("dark theme applies", evaluate("document.body.classList.contains('theme-dark')") is True)
+evaluate("__palacedb.toggleTheme()")
+time.sleep(0.3)
+check("theme toggles back", evaluate("document.body.classList.contains('theme-dark')") is False)
+
+evaluate("__palacedb.toggleSidebar()")
+time.sleep(0.3)
+check("table list collapses", evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is True)
+width = evaluate("document.getElementById('sidebar').getBoundingClientRect().width")
+check("collapsed sidebar is a rail", width is not None and width <= 40, width)
+evaluate("__palacedb.toggleSidebar()")
+time.sleep(0.3)
+check("table list expands again", evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is False)
+
+# --- settings window: interface size, table size and colour scheme
+# The window is reached from the toolbar and from the View menu, and it previews its
+# choices live: the sizes and the palette are plain CSS variables, so a change is visible
+# before the dialog is closed. Cancel has to put the previous values back.
+evaluate("__palacedb.applySettings({uiFontSize: 15, gridFontSize: 14, scheme: 'light'})")
+time.sleep(0.3)
+
+check("the toolbar has a settings button",
+      evaluate("!!document.querySelector('.toolbar [data-action=\"settings\"]')") is True)
+check("the View menu offers Settings",
+      evaluate("!!document.querySelector('[data-menu=\"view\"] [data-action=\"settings\"]')") is True)
+
+evaluate("document.querySelector('.toolbar [data-action=\"settings\"]').click()")
+time.sleep(0.5)
+check("the settings window opens", evaluate("!document.getElementById('modal').hidden") is True)
+check("it is titled Settings", evaluate("document.getElementById('modalTitle').textContent") == "Settings")
+ranges = evaluate("[...document.querySelectorAll('.settings-range')].map(i => i.value).join(',')")
+cards = evaluate("document.querySelectorAll('.scheme-card').length")
+names = evaluate("[...document.querySelectorAll('.scheme-card')].map(c => c.dataset.scheme).join(',')")
+check("it offers two sizes and nine palettes", ranges == "15,14" and cards == 9, (ranges, cards))
+check("the palettes include the pastel ones",
+      all(name in names for name in ("rose", "lilac", "olive", "mint")), names)
+check("the current palette is marked",
+      evaluate("document.querySelectorAll('.scheme-card.active').length") == 1
+      and evaluate("(document.querySelector('.scheme-card.active') || {}).dataset.scheme") == "light",
+      evaluate("(document.querySelector('.scheme-card.active') || {}).dataset.scheme"))
+check("the preview uses the table variables",
+      evaluate("""(() => {
+        const row = document.querySelector('.settings-preview .sp-row');
+        if (!row) return false;
+        const style = getComputedStyle(row);
+        return Math.round(parseFloat(style.fontSize)) === 14
+          && Math.round(row.getBoundingClientRect().height) === 38;
+      })()""") is True)
+
+# --- a bigger table font must also make the rows taller
+evaluate("""(() => {
+  const input = document.querySelectorAll('.settings-range')[1];
+  input.value = '18';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+})()""")
+time.sleep(0.5)
+check("the table font size applies",
+      evaluate("getComputedStyle(document.documentElement).getPropertyValue('--grid-font-size').trim()") == "18px")
+check("the cells follow the new size",
+      evaluate("Math.round(parseFloat(getComputedStyle(document.querySelector('#gridRows .cell')).fontSize))") == 18,
+      evaluate("getComputedStyle(document.querySelector('#gridRows .cell')).fontSize"))
+# Every row is at least the base height for this font, and the ones with wrapped text are
+# taller than it. (The base is read from the stylesheet: which rows happen to fit on one
+# line depends on the sample and on how much text earlier checks have written.)
+check("the rows grew with the text",
+      evaluate("""(() => {
+        const cells = [...document.querySelectorAll('#gridGutter .gutter-cell')];
+        const base = Math.round(parseFloat(getComputedStyle(document.documentElement)
+          .getPropertyValue('--row-height')));
+        if (!cells.length) return null;
+        const heights = cells.map(c => Math.round(c.getBoundingClientRect().height));
+        return heights.every(h => h >= base) && heights.some(h => h > base) ? base : -1;
+      })()""") == 49,
+      evaluate("""(() => {
+        const cells = [...document.querySelectorAll('#gridGutter .gutter-cell')];
+        return cells.map(c => Math.round(c.getBoundingClientRect().height)).join(',');
+      })()"""))
+check("rows are still placed by the new height",
+      evaluate("""(() => {
+        const cell = document.querySelector('#gridRows .cell[data-row="3"]');
+        const gutter = document.querySelector('#gridGutter .gutter-cell[data-row="3"]');
+        if (!cell || !gutter) return false;
+        return Math.abs(cell.getBoundingClientRect().top - gutter.getBoundingClientRect().top) < 2;
+      })()""") is True)
+
+# --- the interface size is separate from the table size
+evaluate("""(() => {
+  const input = document.querySelectorAll('.settings-range')[0];
+  input.value = '17';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+})()""")
+time.sleep(0.4)
+check("the interface font size applies",
+      evaluate("Math.round(parseFloat(getComputedStyle(document.body).fontSize))") == 17,
+      evaluate("getComputedStyle(document.body).fontSize"))
+check("the table size is left alone",
+      evaluate("getComputedStyle(document.documentElement).getPropertyValue('--font-size').trim()") == "17px"
+      and evaluate("getComputedStyle(document.documentElement).getPropertyValue('--grid-font-size').trim()") == "18px")
+check("the size readouts show the numbers",
+      evaluate("[...document.querySelectorAll('.settings-value')].map(s => s.textContent).join(',')") == "17 px,18 px",
+      evaluate("[...document.querySelectorAll('.settings-value')].map(s => s.textContent).join(',')"))
+
+# --- choosing a palette repaints the window at once
+evaluate("document.querySelector('.scheme-card[data-scheme=\"ocean\"]').click()")
+time.sleep(0.4)
+check("the palette applies immediately",
+      evaluate("document.body.dataset.scheme") == "ocean"
+      and evaluate("document.body.classList.contains('theme-dark')") is True)
+check("the chosen palette is marked",
+      evaluate("(document.querySelector('.scheme-card.active') || {}).dataset.scheme") == "ocean")
+
+# --- Cancel is a real undo of the preview
+evaluate("document.getElementById('modalCancel').click()")
+time.sleep(0.5)
+check("Cancel closes the window", evaluate("document.getElementById('modal').hidden") is True)
+check("Cancel restores the previous sizes",
+      evaluate("getComputedStyle(document.documentElement).getPropertyValue('--grid-font-size').trim()") == "14px"
+      and evaluate("getComputedStyle(document.documentElement).getPropertyValue('--font-size').trim()") == "15px")
+check("Cancel restores the previous palette",
+      evaluate("document.body.dataset.scheme") == "light"
+      and evaluate("document.body.classList.contains('theme-dark')") is False)
+check("the rows are back to their old height",
+      evaluate("""(() => {
+        const cells = [...document.querySelectorAll('#gridGutter .gutter-cell')];
+        if (!cells.length) return null;
+        return Math.min(...cells.map(c => Math.round(c.getBoundingClientRect().height)));
+      })()""") == 38,
+      evaluate("""(() => {
+        const cells = [...document.querySelectorAll('#gridGutter .gutter-cell')];
+        return cells.map(c => Math.round(c.getBoundingClientRect().height)).join(',');
+      })()"""))
+
+# --- Done keeps the choice, and it is stored for the next start
+evaluate("__palacedb.openSettings()")
+time.sleep(0.5)
+evaluate("""(() => {
+  const input = document.querySelectorAll('.settings-range')[1];
+  input.value = '16';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  document.querySelector('.scheme-card[data-scheme="graphite"]').click();
+})()""")
+time.sleep(0.4)
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(0.5)
+stored = evaluate("localStorage.getItem('palacedb.settings')")
+try:
+    stored_json = json.loads(stored or "{}")
+except ValueError:
+    stored_json = {}
+check("Done keeps the choice", evaluate("getComputedStyle(document.documentElement).getPropertyValue('--grid-font-size').trim()") == "16px"
+      and evaluate("document.body.dataset.scheme") == "graphite")
+check("the choice is stored for the next start",
+      stored_json.get("gridFontSize") == 16 and stored_json.get("scheme") == "graphite",
+      stored)
+
+# --- restoring the defaults is one button
+evaluate("__palacedb.openSettings()")
+time.sleep(0.5)
+evaluate("document.getElementById('settingsReset').click()")
+time.sleep(0.4)
+check("Restore defaults puts the sizes back",
+      evaluate("[...document.querySelectorAll('.settings-range')].map(i => i.value).join(',')") == "15,14"
+      and evaluate("(document.querySelector('.scheme-card.active') || {}).dataset.scheme") == "light")
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(0.4)
+check("the window is back to the default look",
+      evaluate("document.body.dataset.scheme") == "light"
+      and evaluate("getComputedStyle(document.documentElement).getPropertyValue('--grid-font-size').trim()") == "14px"
+      and evaluate("__palacedb.isDark()") is False)
+
+# --- a wrapped value makes its row taller, so the whole text stays readable
+text_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Text')")
+base_height = evaluate(
+    "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-height'))")
+if text_col is not None and text_col >= 0:
+    text_name = evaluate("__palacedb.grid.columns[%d].name" % text_col)
+    original = evaluate("(() => { const v = __palacedb.grid.cellValue(2, %d);"
+                        " return v ? (v.d || v.t || '') : ''; })()" % text_col)
+
+    def set_text(value):
+        evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, "
+                 f"row: 2, column: {json.dumps(text_name)}, text: {json.dumps(value)}}})")
+        time.sleep(1.0)
+
+    long_text = "A wrapped value has to be readable in full, not cut off after two lines. " * 3
+    set_text(long_text)
+    tall = evaluate("Math.round(__palacedb.grid.heightOf(2))")
+    check("a wrapped value makes its row taller", tall > base_height, (tall, base_height))
+    check("the whole value is on screen, not clipped",
+          evaluate("""(() => {
+            const span = document.querySelector(
+              '#gridRows .grid-row[data-row="2"] .cell[data-col="%d"] .cell-value');
+            if (!span) return null;
+            return span.scrollHeight <= span.clientHeight + 1;
+          })()""" % text_col) is True,
+          evaluate("""(() => {
+            const span = document.querySelector(
+              '#gridRows .grid-row[data-row="2"] .cell[data-col="%d"] .cell-value');
+            if (!span) return null;
+            return span.scrollHeight + '/' + span.clientHeight;
+          })()""" % text_col))
+    check("the rows below it moved down",
+          evaluate("""(() => {
+            const first = document.querySelector('#gridRows .grid-row[data-row="2"]');
+            const second = document.querySelector('#gridRows .grid-row[data-row="3"]');
+            if (!first || !second) return null;
+            return Math.round(second.getBoundingClientRect().top)
+                   - Math.round(first.getBoundingClientRect().bottom);
+          })()""") == 0)
+    check("the row number matches the taller row",
+          evaluate("""(() => {
+            const cell = document.querySelector('#gridGutter .gutter-cell[data-row="2"]');
+            return cell ? Math.round(cell.getBoundingClientRect().height) : null;
+          })()""") == tall,
+          (tall, evaluate("""(() => {
+            const cell = document.querySelector('#gridGutter .gutter-cell[data-row="2"]');
+            return cell ? Math.round(cell.getBoundingClientRect().height) : null;
+          })()""")))
+
+    set_text(original)
+    check("a short value gives the height back",
+          evaluate("Math.round(__palacedb.grid.heightOf(2))") == round(base_height),
+          evaluate("Math.round(__palacedb.grid.heightOf(2))"))
+
+# --- the row-number gutter is narrow: three digits, everything longer is clipped
+gutter = evaluate("""(() => {
+  const cell = document.querySelector('.gutter-cell');
+  const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gutter-width'));
+  return {
+    variable: width,
+    box: cell ? Math.round(cell.getBoundingClientRect().width) : 0,
+    clips: cell ? cell.scrollWidth >= cell.clientWidth : false,
+  };
+})()""")
+check("the row-number column is about half as wide as before",
+      gutter and gutter["variable"] <= 30 and gutter["box"] <= 30, gutter)
+check("a row number too long for it is clipped, not widened",
+      gutter and gutter["clips"] is True, gutter)
+
+# --- one sidebar toggle, in one place, the same size and style in both states
+toggle = evaluate("""(() => {
+  const buttons = [...document.querySelectorAll(
+    '.toolbar [data-action="toggleSidebar"], .sidebar-header [data-action="toggleSidebar"], .sidebar-header #sidebarToggle')];
+  const button = document.getElementById('sidebarExpand');
+  const bar = () => button.closest('.toolbar').getBoundingClientRect();
+  const offset = (box) => Math.round(box.left - bar().left);
+  const before = button.getBoundingClientRect();
+  const beforeOffset = offset(before);
+  button.click();
+  const collapsedBox = button.getBoundingClientRect();
+  const collapsedOffset = offset(collapsedBox);
+  const collapsed = document.getElementById('sidebar').classList.contains('collapsed');
+  button.click();
+  const backBox = button.getBoundingClientRect();
+  return {
+    controls: buttons.length,
+    inToolbar: !!button.closest('.toolbar'),
+    inSidebarHeader: !!document.querySelector('.sidebar-header #sidebarToggle'),
+    collapsed,
+    expandedAgain: !document.getElementById('sidebar').classList.contains('collapsed'),
+    // Size is absolute, position is measured from the left edge of the toolbar: the
+    // toolbar itself moves left when the table list goes away, the button must not
+    // move inside it.
+    sameSize: Math.round(before.width) === Math.round(collapsedBox.width)
+      && Math.round(before.height) === Math.round(collapsedBox.height),
+    sameOffset: beforeOffset === collapsedOffset && collapsedOffset === offset(backBox),
+    style: getComputedStyle(button).borderRadius,
+  };
+})()""")
+check("the table list has a single toggle control",
+      toggle and toggle["controls"] == 1 and toggle["inToolbar"] is True
+      and toggle["inSidebarHeader"] is False, toggle)
+check("the same button collapses and restores the list",
+      toggle and toggle["collapsed"] is True and toggle["expandedAgain"] is True, toggle)
+check("the button keeps its position and size in both states",
+      toggle and toggle["sameSize"] is True and toggle["sameOffset"] is True, toggle)
+
+# --- Tab toggles the table list outside the table
+evaluate("document.getElementById('sidebarExpand').focus()")
+evaluate("document.activeElement.dispatchEvent("
+         "new KeyboardEvent('keydown', {key:'Tab', bubbles:true}))")
+time.sleep(0.4)
+check("Tab collapses the table list",
+      evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is True)
+evaluate("document.activeElement.dispatchEvent("
+         "new KeyboardEvent('keydown', {key:'Tab', bubbles:true}))")
+time.sleep(0.4)
+check("Tab brings it back",
+      evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is False)
+
+# Inside the table Tab still moves to the next cell, which is why it is not stolen there.
+evaluate("__palacedb.grid.moveCursor(1, 0)")
+before_col = evaluate("__palacedb.grid.cursor.col")
+evaluate("document.getElementById('gridBody').dispatchEvent("
+         "new KeyboardEvent('keydown', {key:'Tab', bubbles:true}))")
+time.sleep(0.3)
+check("Tab inside the table still moves between cells",
+      evaluate("__palacedb.grid.cursor.col") == before_col + 1
+      and evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is False,
+      (before_col, evaluate("__palacedb.grid.cursor.col")))
+
+# --- the palette belongs to the file, so it is written to the side-car
+META = CDB + ".meta.json"
+evaluate("__palacedb.applySettings({uiFontSize: 15, gridFontSize: 14, scheme: 'rose'})")
+time.sleep(1.2)
+meta = {}
+try:
+    with open(META, encoding="utf-8") as handle:
+        meta = json.load(handle)
+except Exception as error:
+    print("meta read failed:", error)
+check("the palette is stored in the file's side-car",
+      (meta.get("appearance") or {}).get("scheme") == "rose", meta.get("appearance"))
+check("the palette never reaches the database file",
+      "appearance" not in open(CDB, encoding="utf-8").read())
+# The full round trip - close, change the preference, reopen - is checked at the end of
+# the run, where losing the current table does no harm to the rest of the suite.
+evaluate("__palacedb.applySettings({uiFontSize: 15, gridFontSize: 14, scheme: 'light'})")
+time.sleep(0.6)
+
+# --- a second window on the same file is read-only and follows the writer (R2 / F15)
+# Save first so no recovery prompt can appear in the new window.
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.2)
+
+evaluate("__palacedb.send('newWindow')")
+time.sleep(5.0)
+park_windows(proc.pid)
+
+second = None
+for target in [t for t in json.load(urllib.request.urlopen("http://127.0.0.1:9333/json/list", timeout=3))
+               if t.get("type") == "page"]:
+    if target["webSocketDebuggerUrl"] == FIRST_TARGET:
+        continue
+    sock = websocket.create_connection(target["webSocketDebuggerUrl"], timeout=15)
+    try:
+        ready = False
+        for _ in range(30):
+            if evaluate("!!window.__palacedb", sock=sock):
+                ready = True
+                break
+            time.sleep(0.4)
+        if not ready:
+            sock.close()
+            continue
+
+        if evaluate("__palacedb.state.document", sock=sock) is None:
+            evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(CDB), sock=sock)
+            time.sleep(2.5)
+
+        if evaluate("__palacedb.state.document", sock=sock):
+            second = sock
+            break
+    except Exception:
+        pass
+    sock.close()
+
+check("second window opened", second is not None)
+if second is not None:
+    check("second window is read-only",
+          evaluate("__palacedb.state.document.readOnly", sock=second) is True,
+          evaluate("__palacedb.state.document.readOnlyReason", sock=second))
+
+    evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, "
+             "row: 0, column: %s, text: 'WIN1_SAVE'})" % json.dumps(ID_NAME))
+    time.sleep(0.8)
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+    time.sleep(1.2)
+
+    followed = False
+    for _ in range(24):
+        time.sleep(0.5)
+        if evaluate("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t",
+                    sock=second) == "WIN1_SAVE":
+            followed = True
+            break
+    check("read-only window followed the save", followed,
+          evaluate("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t", sock=second))
+
+    evaluate("__palacedb.send('exit')", sock=second)
+    second.close()
+    time.sleep(0.8)
+
+# --- automatic backup while dirty (C1 / F19)
+backup_path = CDB + ".autobackup"
+if os.path.exists(backup_path):
+    os.remove(backup_path)
+
+check("document clean before the backup test",
+      wait_for("__palacedb.state.document.dirty === false", 6))
+
+evaluate("__palacedb.run('addRow')")
+ok = wait_for_file(backup_path, 20, True)
+check("automatic backup written while dirty", ok, backup_path)
+
+if ok:
+    backup_data = json.load(open(backup_path, encoding="utf-8"))
+    check("backup contains the unsaved row",
+          len(backup_data["sheets"][0]["lines"]) >= evaluate("__palacedb.grid.rowCount") - 1,
+          (len(backup_data["sheets"][0]["lines"]), evaluate("__palacedb.grid.rowCount")))
+
+evaluate("__palacedb.send('undo')")
+check("undo after the backup leaves a clean document",
+      wait_for("__palacedb.state.document.dirty === false", 6))
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.2)
+check("backup removed after saving", wait_for_file(backup_path, 8, False), backup_path)
+
+# --- external modification detection (F15)
+external = json.load(open(CDB, encoding="utf-8"))
+external["sheets"][0]["lines"][0][ID_NAME] = "EXTERNAL_EDIT"
+with open(CDB, "w", encoding="utf-8", newline="\n") as handle:
+    json.dump(external, handle, ensure_ascii=False, indent="\t")
+
+ok = wait_for("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t === 'EXTERNAL_EDIT'", 25)
+check("external change reloaded automatically", ok,
+      evaluate("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t"))
+check("reloaded document is still editable", evaluate("__palacedb.state.document.readOnly") is False)
+
+# --- window geometry is written into the side-car (F17)
+meta_path = CDB + ".meta.json"
+meta = json.load(open(meta_path, encoding="utf-8")) if os.path.exists(meta_path) else {}
+geometry = meta.get("windowState") or {}
+check("window geometry stored in the side-car",
+      isinstance(geometry.get("x"), (int, float)) and isinstance(geometry.get("y"), (int, float))
+      and isinstance(geometry.get("width"), (int, float)),
+      geometry)
+check("window geometry never reaches the database file",
+      "windowState" not in open(CDB, encoding="utf-8").read())
+
+# --- opening a file must not move the window
+# The remembered position is applied before the window is shown; once it is on screen a
+# new document must leave it alone. This used to jump on every open, because the
+# placement arrived after the first paint.
+GEO_DB = os.path.join(WORK, "geometry", "Second.cdb")
+os.makedirs(os.path.dirname(GEO_DB), exist_ok=True)
+shutil.copy(SOURCE, GEO_DB)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.5)
+move_window(proc.pid, 120, 90)
+before_rect = wait_rect(proc.pid)
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(GEO_DB))
+switched = wait_for("!!__palacedb.state.document && __palacedb.state.document.path === %s"
+                    % json.dumps(GEO_DB), 25)
+after_rect = wait_rect(proc.pid)
+check("another file opens in the same window", switched is True,
+      evaluate("(__palacedb.state.document || {}).path"))
+check("opening a file leaves the window where it is",
+      before_rect is not None and after_rect is not None
+      and before_rect[0] == after_rect[0] and before_rect[1] == after_rect[1],
+      (before_rect, after_rect))
+
+# --- image thumbnails and the display icon (R9 / C06)
+# Neither sample database has an image or a reference column, so a small purpose-built
+# file is used for these two features.
+ART_DIR = os.path.join(WORK, "art")
+os.makedirs(ART_DIR, exist_ok=True)
+ART_DB = os.path.join(ART_DIR, "Sprites.cdb")
+with open(os.path.join(ART_DIR, "hero.png"), "wb") as handle:
+    handle.write(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
+
+sprites = {
+    "sheets": [
+        {
+            "name": "Sprite",
+            "columns": [
+                {"typeStr": "0", "name": "id"},
+                {"typeStr": "7", "name": "icon"},
+                {"typeStr": "1", "name": "label"},
+            ],
+            "lines": [
+                {"id": "hero", "icon": "hero.png", "label": "Hero"},
+                {"id": "ghost", "icon": "missing.png", "label": "Ghost"},
+            ],
+        },
+        {
+            "name": "Card",
+            "columns": [
+                {"typeStr": "0", "name": "id"},
+                {"typeStr": "6:Sprite", "name": "art"},
+            ],
+            "lines": [{"id": "c1", "art": "hero"}],
+        },
+    ]
+}
+with open(ART_DB, "w", encoding="utf-8", newline="\n") as handle:
+    json.dump(sprites, handle, ensure_ascii=False, indent="\t")
+
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(ART_DB))
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'Sprites.cdb'", 20)
+check("purpose-built database opened", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+
+evaluate("""(() => {
+  const item = Array.from(__palacedb.elements.tableList.querySelectorAll('.table-item'))
+    .find(i => i.dataset.sheet === 'Sprite');
+  if (item) item.click();
+  return Boolean(item);
+})()""")
+wait_for("__palacedb.grid.sheet === 'Sprite' && __palacedb.grid.cache.size > 1")
+check("image rows rendered", evaluate("__palacedb.grid.cache.size") == 2,
+      evaluate("__palacedb.grid.cache.size"))
+
+ok = wait_for("document.querySelectorAll('img.cell-thumb').length === 2", 20)
+check("image cells reserve a thumbnail slot", ok,
+      evaluate("document.querySelectorAll('img.cell-thumb').length"))
+
+ok = wait_for("""Array.from(document.querySelectorAll('img.cell-thumb'))
+  .some(i => i.src.startsWith('data:image/png;base64,'))""", 20)
+check("image path resolved to a thumbnail", ok,
+      evaluate("Array.from(document.querySelectorAll('img.cell-thumb')).map(i=>i.src.slice(0,24)).join('|')"))
+
+ok = wait_for("document.querySelectorAll('img.cell-thumb.failed').length === 1", 20)
+check("missing image file marked, not crashed", ok,
+      evaluate("document.querySelectorAll('img.cell-thumb.failed').length"))
+check("image cell still shows the stored path",
+      evaluate("document.querySelector('.cell.has-thumb .cell-text').textContent") == "hero.png",
+      evaluate("document.querySelector('.cell.has-thumb .cell-text').textContent"))
+
+# Display icon: the property lives on the referenced table (C06).
+evaluate("__palacedb.send('setDisplayIcon', {sheet: 'Sprite', column: 'icon'})")
+ok = wait_for("""(__palacedb.state.document.sheets.find(s => s.name === 'Sprite') || {}).displayIcon === 'icon'""", 15)
+check("display icon recorded on the table", ok,
+      evaluate("(__palacedb.state.document.sheets.find(s => s.name === 'Sprite') || {}).displayIcon"))
+
+ok = evaluate("""(() => {
+  const item = Array.from(__palacedb.elements.tableList.querySelectorAll('.table-item'))
+    .find(i => i.dataset.sheet === 'Card');
+  if (item) item.click();
+  return Boolean(item);
+})()""")
+check("card table selected", ok)
+wait_for("__palacedb.grid.sheet === 'Card' && __palacedb.grid.cache.size > 0")
+check("reference column is the second column",
+      evaluate("__palacedb.grid.columns[1] && __palacedb.grid.columns[1].type") == "Ref",
+      evaluate("__palacedb.grid.columns.map(c=>c.name+':'+c.type).join(',')"))
+evaluate("__palacedb.editor.begin(0, 1)")
+ok = wait_for("document.querySelectorAll('.dropdown-item').length === 2", 20)
+check("reference dropdown lists the target rows", ok,
+      evaluate("document.querySelectorAll('.dropdown-item').length"))
+
+ok = wait_for("""Array.from(document.querySelectorAll('.dropdown-icon img'))
+  .some(i => i.src.startsWith('data:image/png;base64,'))""", 20)
+check("reference dropdown shows the icon", ok,
+      evaluate("document.querySelectorAll('.dropdown-icon img').length"))
+check("row without an icon file is marked",
+      evaluate("document.querySelectorAll('.dropdown-icon.failed').length") == 1,
+      evaluate("document.querySelectorAll('.dropdown-icon.failed').length"))
+# No display column is declared on Sprite, so the label is the identifier.
+check("dropdown labels the rows and marks the current one",
+      evaluate("(document.querySelector('.dropdown-item.selected .dropdown-label') || {}).textContent") == "hero",
+      evaluate("(document.querySelector('.dropdown-item.selected .dropdown-label') || {}).textContent"))
+evaluate("__palacedb.editor.cancel()")
+
+# The icon is a table property, so it belongs in the .cdb, not in the side-car.
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.2)
+saved_sprites = json.load(open(ART_DB, encoding="utf-8"))
+check("display icon written to the database file",
+      saved_sprites["sheets"][0]["props"]["displayIcon"] == "icon",
+      saved_sprites["sheets"][0].get("props"))
+check("display icon kept out of the side-car",
+      "displayIcon" not in open(ART_DB + ".meta.json", encoding="utf-8").read())
+
+# --- recent files (F03)
+recent_paths = "__palacedb.elements.recentMenu.querySelectorAll('[data-action=\"openRecent\"]')"
+ok = wait_for("%s.length >= 2" % recent_paths, 15)
+check("recent list remembers both files", ok,
+      evaluate("Array.from(%s).map(b => b.dataset.path).join('|')" % recent_paths))
+check("most recent file is first",
+      (evaluate("(%s)[0] && (%s)[0].dataset.path" % (recent_paths, recent_paths)) or "").endswith("Sprites.cdb"),
+      evaluate("(%s)[0] && (%s)[0].dataset.path" % (recent_paths, recent_paths)))
+check("recent entry shows the file name and folder",
+      evaluate("(() => { const b = (%s)[0]; return b ? b.textContent : null; })()" % recent_paths) is not None
+      and "Sprites.cdb" in (evaluate("(() => { const b = (%s)[0]; return b ? b.textContent : null; })()" % recent_paths) or ""),
+      evaluate("(() => { const b = (%s)[0]; return b ? b.textContent : null; })()" % recent_paths))
+
+# Clicking the entry for the first database must switch this window back to it.
+evaluate("""(() => {
+  const button = Array.from(document.querySelectorAll('#recentMenu [data-action="openRecent"]'))
+    .find(b => b.dataset.path.endsWith('TestData2.cdb'));
+  if (button) button.click();
+  return Boolean(button);
+})()""")
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'TestData2.cdb'", 20)
+check("clicking a recent entry opens that file", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+
+settings_file = os.path.join(DATA_DIR, "settings.json")
+check("recent list persisted outside the project",
+      os.path.exists(settings_file)
+      and "Sprites.cdb" in open(settings_file, encoding="utf-8").read(),
+      settings_file)
+
+# A remembered file that has been deleted is dropped when it is clicked.
+GONE = os.path.join(WORK, "Gone.cdb")
+shutil.copy(SOURCE, GONE)
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(GONE))
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'Gone.cdb'", 20)
+check("third database opened", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+wait_for("%s.length >= 3" % recent_paths, 10)
+
+os.remove(GONE)
+evaluate("""(() => {
+  const button = Array.from(document.querySelectorAll('#recentMenu [data-action="openRecent"]'))
+    .find(b => b.dataset.path.endsWith('Gone.cdb'));
+  if (button) button.click();
+  return Boolean(button);
+})()""")
+ok = wait_for("""!Array.from(document.querySelectorAll('#recentMenu [data-action="openRecent"]'))
+  .some(b => b.dataset.path.endsWith('Gone.cdb'))""", 15)
+check("deleted recent file removed from the list", ok,
+      evaluate("Array.from(%s).map(b => b.dataset.path).join('|')" % recent_paths))
+check("deleted recent file reported to the user",
+      evaluate("document.querySelectorAll('.toast').length") >= 1,
+      evaluate("document.querySelectorAll('.toast').length"))
+
+evaluate("""(() => {
+  const clear = document.querySelector('#recentMenu [data-action="clearRecent"]');
+  if (clear) clear.click();
+  return Boolean(clear);
+})()""")
+ok = wait_for("%s.length === 0" % recent_paths, 15)
+check("clear recent files empties the list", ok,
+      evaluate("__palacedb.elements.recentMenu.textContent"))
+check("empty list shows a placeholder",
+      "(no recent files)" in (evaluate("__palacedb.elements.recentMenu.textContent") or ""),
+      evaluate("__palacedb.elements.recentMenu.textContent"))
+check("clearing persisted to the settings file",
+      "Sprites.cdb" not in open(settings_file, encoding="utf-8").read(),
+      open(settings_file, encoding="utf-8").read()[:120])
+
+# --- about dialog (F09)
+evaluate("__palacedb.run('about')")
+ok = wait_for("!document.getElementById('modal').hidden && !!document.querySelector('.about-title')", 15)
+check("about dialog opens", ok, evaluate("document.querySelector('.about-title') && document.querySelector('.about-title').textContent"))
+check("about shows the version",
+      (evaluate("document.querySelector('.about-title').textContent") or "").startswith("PalaceDB "),
+      evaluate("document.querySelector('.about-title').textContent"))
+check("about lists runtime details",
+      evaluate("document.querySelectorAll('.about-row').length") >= 4,
+      evaluate("Array.from(document.querySelectorAll('.about-row')).map(r => r.textContent).join(' | ')"))
+check("about reports the .NET runtime",
+      ".NET" in (evaluate("document.querySelector('.about-rows').textContent") or ""),
+      evaluate("document.querySelector('.about-rows').textContent"))
+check("about has no Cancel button", evaluate("document.getElementById('modalCancel').hidden") is True)
+evaluate("document.getElementById('modalOk').click()")
+check("about dialog closes", wait_for("document.getElementById('modal').hidden", 8))
+
+# --- export localized texts (F08)
+# A fresh copy: the second window opened earlier still holds the write slot on the
+# working copy, and a read-only document silently ignores structural edits.
+EXPORT_DB = os.path.join(WORK, "Export.cdb")
+shutil.copy(SOURCE, EXPORT_DB)
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(EXPORT_DB))
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'Export.cdb'", 25)
+check("database opened for the export", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+check("export database is editable",
+      evaluate("__palacedb.state.document && __palacedb.state.document.readOnly") is False,
+      evaluate("__palacedb.state.document && __palacedb.state.document.readOnlyReason"))
+
+LOCALIZED_XML = os.path.join(WORK, "localized.xml")
+NO_LOCALIZABLE_XML = os.path.join(WORK, "nothing.xml")
+
+evaluate("__palacedb.run('exportLocalized', {path: %s})" % json.dumps(NO_LOCALIZABLE_XML))
+ok = wait_for("document.querySelectorAll('.toast').length > 0", 10)
+check("export refuses a database without localizable columns", ok,
+      evaluate("Array.from(document.querySelectorAll('.toast')).map(t => t.textContent).join('|')"))
+check("nothing is written when the export is refused", not os.path.exists(NO_LOCALIZABLE_XML))
+
+# The column header offers the toggle in its context menu.
+evaluate("""(() => {
+  const index = __palacedb.grid.columns.findIndex(c => c.type === 'Text');
+  const head = document.querySelectorAll('.head-cell')[index];
+  if (head) head.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:200, clientY:200}));
+  return Boolean(head);
+})()""")
+time.sleep(0.4)
+head_labels = evaluate(
+    "Array.from(document.querySelectorAll('#contextMenu .context-item span')).map(s=>s.textContent).join('|')")
+check("column context menu offers Localizable", "Localizable" in (head_labels or ""), head_labels)
+evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))")
+time.sleep(0.3)
+
+text_column = evaluate("""(() => {
+  const sheet = (__palacedb.state.document.sheets || []).find(s => s.name === __palacedb.state.currentSheet);
+  if (!sheet) return null;
+  // A text column that actually holds something: the exporter skips empty values, and the
+  // sample is a scratch file whose columns come and go.
+  const columns = __palacedb.grid.columns || [];
+  for (let i = 0; i < columns.length; i++) {
+    if (columns[i].type !== 'Text') continue;
+    const cell = __palacedb.grid.cellValue(0, i);
+    if (cell && cell.t) return {sheet: sheet.name, column: columns[i].name};
+  }
+  const fallback = columns.find(c => c.type === 'Text');
+  return fallback ? {sheet: sheet.name, column: fallback.name} : null;
+})()""")
+check("the current table has a text column", text_column is not None, text_column)
+
+if text_column:
+    sheet_name, column_name = text_column["sheet"], text_column["column"]
+    first_value = evaluate(
+        "(__palacedb.grid.cellValue(0, __palacedb.grid.columns.findIndex(c => c.name === %s)) || {}).t"
+        % json.dumps(column_name))
+
+    evaluate("__palacedb.send('setColumnKind', {sheet: %s, column: %s, localizable: true})"
+             % (json.dumps(sheet_name), json.dumps(column_name)))
+    ok = wait_for("(__palacedb.grid.columns.find(c => c.name === %s) || {}).localizable === true"
+                  % json.dumps(column_name), 10)
+    check("column can be marked localizable", ok,
+          evaluate("(__palacedb.grid.columns.find(c => c.name === %s) || {}).localizable"
+                   % json.dumps(column_name)))
+
+    evaluate("__palacedb.run('exportLocalized', {path: %s})" % json.dumps(LOCALIZED_XML))
+    ok = wait_for_file(LOCALIZED_XML, 10)
+    check("export writes the xml file", ok, LOCALIZED_XML)
+
+    if ok:
+        raw = open(LOCALIZED_XML, "rb").read()
+        text = raw.decode("utf-8-sig")
+        check("export starts with a byte order mark", raw[:3] == b"\xef\xbb\xbf", raw[:3])
+        check("export is rooted at <cdb>", text.lstrip().startswith("<cdb>"), text[:40])
+        check("export names the sheet", 'name="%s"' % sheet_name in text, text[:200])
+        check("export contains a column element", "<%s>" % column_name in text, text[:400])
+        if first_value:
+            check("export contains the first row value", first_value in text, first_value)
+
+    # The localizable flag is a column property of the .cdb format, so it has to reach
+    # the file on save (it is not presentation state and does not belong to the side-car).
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+    time.sleep(1.2)
+    stored = open(EXPORT_DB, encoding="utf-8").read()
+    check("localizable flag saved into the database", "localizable" in stored, column_name)
+    meta_text = (open(EXPORT_DB + ".meta.json", encoding="utf-8").read()
+                 if os.path.exists(EXPORT_DB + ".meta.json") else "")
+    check("localizable flag kept out of the metadata side-car", "localizable" not in meta_text, meta_text[:200])
+
+# --- edit column dialog: name, type and options in one window (C01 / C02 / C03)
+# The dialog is opened on the third column, so the checks follow that column rather than
+# a name that differs between the sample files.
+evaluate("window.__testText = __palacedb.grid.columns[2].name")
+evaluate("""(() => {
+  const head = document.querySelectorAll('.head-cell')[2];
+  if (head) head.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:220, clientY:200}));
+  return Boolean(head);
+})()""")
+time.sleep(0.4)
+menu_labels = evaluate(
+    "Array.from(document.querySelectorAll('#contextMenu .context-item span')).map(s=>s.textContent).join('|')")
+check("column menu offers one Edit Column entry",
+      "Edit Column" in (menu_labels or "") and "Rename Column" not in (menu_labels or "")
+      and "Change Type" not in (menu_labels or ""), menu_labels)
+evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+    .find(i => (i.textContent || '').indexOf('Edit Column') >= 0);
+  if (item) item.click();
+  return Boolean(item);
+})()""")
+ok = wait_for("!document.getElementById('modal').hidden && document.querySelectorAll('#modal .form-check').length === 2", 10)
+check("edit column dialog opens", ok,
+      evaluate("document.querySelectorAll('#modal .form-row').length"))
+check("edit column dialog has a name field and a type list",
+      evaluate("!!document.querySelector('#modal .form-row input[type=text]')")
+      and evaluate("document.querySelectorAll('#modal select').length") >= 1,
+      evaluate("Array.from(document.querySelectorAll('#modal .form-row > span')).map(s=>s.textContent).join('|')"))
+
+def format_row_hidden():
+    return evaluate("""(() => {
+      const r = Array.from(document.querySelectorAll('#modal .form-row')).find(x => x.textContent.startsWith('Format'));
+      return r ? r.hidden : null;
+    })()""")
+
+check("display format hidden for a text column", format_row_hidden() is True, format_row_hidden())
+evaluate("""(() => { const s = document.querySelectorAll('#modal select')[0];
+  s.value = '3'; s.dispatchEvent(new Event('change', {bubbles:true})); return 1; })()""")
+time.sleep(0.3)
+check("display format shown for a number column", format_row_hidden() is False, format_row_hidden())
+evaluate("""(() => { const s = document.querySelectorAll('#modal select')[0];
+  s.value = '1'; s.dispatchEvent(new Event('change', {bubbles:true})); return 1; })()""")
+time.sleep(0.3)
+
+# Apply optional + default + localizable through the same dialog.
+evaluate("""(() => {
+  const rows = Array.from(document.querySelectorAll('#modal .form-row'));
+  const opt = rows.find(r => r.textContent.includes('Optional')).querySelector('input');
+  opt.checked = true;
+  const def = rows.find(r => r.textContent.startsWith('Default')).querySelector('input');
+  def.value = 'hello';
+  def.dispatchEvent(new Event('input', {bubbles:true}));
+  const loc = rows.find(r => r.textContent.includes('Localizable')).querySelector('input');
+  loc.checked = true;
+  return 1;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("""(() => {
+  const c = __palacedb.grid.columns.find(x => x.name === window.__testText);
+  return c && c.optional === true && c.localizable === true && c.defaultValue === 'hello';
+})()""", 10)
+check("edit column applies the whole form in one step", ok,
+      evaluate("JSON.stringify(__palacedb.grid.columns.find(x => x.name === window.__testText))"))
+
+# Apply the options through the same message the dialog sends.
+evaluate("""__palacedb.send('setColumnOptions', {
+  sheet: __palacedb.state.currentSheet, column: window.__testText,
+  optional: true, default: 'hello', display: 'default', localizable: true })""")
+ok = wait_for("""(() => {
+  const c = __palacedb.grid.columns.find(x => x.name === window.__testText);
+  return c && c.optional === true && c.localizable === true && c.defaultValue === 'hello';
+})()""", 10)
+check("column options applied", ok,
+      evaluate("JSON.stringify(__palacedb.grid.columns.find(x => x.name === window.__testText))"))
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.2)
+saved_db = open(EXPORT_DB, encoding="utf-8").read()
+check("optional flag saved", '"opt": true' in saved_db, saved_db[:80])
+check("default value saved", '"defaultValue": "hello"' in saved_db)
+check("localizable flag saved with the options", '"kind": "localizable"' in saved_db)
+
+evaluate("__palacedb.send('undo')")
+ok = wait_for("(() => { const c = __palacedb.grid.columns.find(x => x.name === window.__testText); return c && c.optional === false; })()", 10)
+check("column options undone in one step", ok,
+      evaluate("JSON.stringify(__palacedb.grid.columns.find(x => x.name === window.__testText))"))
+
+# --- paste plain text from a spreadsheet (R5)
+# Two neighbouring text columns, chosen by type: the sample's column order is not fixed.
+TSV_COL = evaluate("""(() => {
+  const cols = __palacedb.grid.columns;
+  for (let i = 0; i + 1 < cols.length; i++) {
+    if (cols[i].type === 'Text' && cols[i + 1].type === 'Text') return i;
+  }
+  return cols.findIndex(c => c.type === 'Text');
+})()""")
+check("the table has two neighbouring text columns", TSV_COL >= 0, TSV_COL)
+set_clipboard("TSV_ONE\tTSV_TWO\nTSV_THREE\tTSV_FOUR")
+evaluate("__palacedb.send('pasteCells', {sheet: __palacedb.state.currentSheet, row: 0, column: %d, mode: 'overwrite'})" % TSV_COL)
+ok = wait_for("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t === 'TSV_ONE'" % (TSV_COL, TSV_COL), 10)
+check("tab separated text pasted into the grid", ok,
+      evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL, TSV_COL)))
+check("the second column of the block landed too",
+      evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL + 1, TSV_COL + 1)) == "TSV_TWO",
+      evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL + 1, TSV_COL + 1)))
+check("the second row of the block landed too",
+      evaluate("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t" % (TSV_COL, TSV_COL)) == "TSV_THREE",
+      evaluate("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t" % (TSV_COL, TSV_COL)))
+
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t !== 'TSV_ONE'" % (TSV_COL, TSV_COL), 10)
+check("pasted block undone in one step", ok,
+      evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL, TSV_COL)))
+
+# A single cell pasted into a data column.
+set_clipboard("only-one-cell")
+evaluate("__palacedb.send('pasteCells', {sheet: __palacedb.state.currentSheet, row: 0, column: %d, mode: 'overwrite'})" % TSV_COL)
+time.sleep(0.6)
+check("single cell paste still works",
+      evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL, TSV_COL)) == "only-one-cell",
+      evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL, TSV_COL)))
+evaluate("__palacedb.send('undo')")
+
+# Pasting while the cursor sits on the identifier column writes identifiers.
+set_clipboard("PASTED_ID_1\nPASTED_ID_2")
+evaluate("__palacedb.grid.moveCursor(0, 0)")
+time.sleep(0.3)
+evaluate("__palacedb.send('pasteCells', {sheet: __palacedb.state.currentSheet, row: 0, column: 0, mode: 'overwrite'})")
+ok = wait_for("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t === 'PASTED_ID_1'", 10)
+check("pasting into the identifier column works", ok,
+      evaluate("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t"))
+check("the second pasted identifier landed too",
+      evaluate("__palacedb.grid.cellValue(1,0) && __palacedb.grid.cellValue(1,0).t") == "PASTED_ID_2",
+      evaluate("__palacedb.grid.cellValue(1,0) && __palacedb.grid.cellValue(1,0).t"))
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t !== 'PASTED_ID_1'", 10)
+check("pasted identifiers undone in one step", ok,
+      evaluate("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t"))
+
+# --- three-way merge of git leftovers (F16)
+# Save first: switching documents would otherwise ask about unsaved changes and block.
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.0)
+
+MERGE_DIR = os.path.join(WORK, "merge")
+os.makedirs(MERGE_DIR, exist_ok=True)
+MERGE = os.path.join(MERGE_DIR, "Merged.cdb")
+merge_base = json.load(open(SOURCE, encoding="utf-8"))
+
+# The local side renamed the first row; the incoming side added a row.
+merge_mine = json.loads(json.dumps(merge_base))
+merge_mine["sheets"][0]["lines"][0][ID_NAME] = "LOCAL_ROW"
+merge_theirs = json.loads(json.dumps(merge_base))
+merge_theirs["sheets"][0]["lines"].append(
+    dict(merge_theirs["sheets"][0]["lines"][0], **{ID_NAME: "INCOMING_ROW"}))
+
+def dump_cdb(path, data):
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent="\t")
+
+dump_cdb(MERGE, merge_theirs)
+dump_cdb(MERGE + ".mine", merge_mine)
+dump_cdb(MERGE + ".r1", merge_base)
+
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(MERGE))
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'Merged.cdb'", 25)
+check("file with git leftovers opens", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+ok = wait_for("!document.getElementById('modal').hidden && !!document.querySelector('.merge-report')", 15)
+check("merge report is shown", ok,
+      evaluate("document.querySelector('.merge-lead') && document.querySelector('.merge-lead').textContent"))
+check("merged document is unsaved",
+      evaluate("__palacedb.state.document && __palacedb.state.document.dirty") is True,
+      evaluate("document.title"))
+check("merge report lists the leftovers",
+      ".mine" in (evaluate("document.querySelector('.merge-note') && document.querySelector('.merge-note').textContent") or ""),
+      evaluate("document.querySelector('.merge-note') && document.querySelector('.merge-note').textContent"))
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(0.3)
+
+merged_row_count = evaluate("__palacedb.state.document.sheets[0].rowCount")
+check("merged document holds both sides",
+      merged_row_count == len(merge_base["sheets"][0]["lines"]) + 1, merged_row_count)
+
+# The grid only holds the rows in view, so the end of the file is checked after saving.
+check("conflict files still present before saving", os.path.exists(MERGE + ".mine"), MERGE)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+ok = wait_for_file(MERGE + ".mine", 10, False)
+check("saving removes the conflict leftovers", ok, os.listdir(MERGE_DIR))
+check("saving keeps the database itself", os.path.exists(MERGE), os.listdir(MERGE_DIR))
+saved = json.load(open(MERGE, encoding="utf-8"))
+saved_ids = [row.get(ID_NAME) for row in saved["sheets"][0]["lines"]]
+check("saved file holds both sides", "LOCAL_ROW" in saved_ids and "INCOMING_ROW" in saved_ids, saved_ids[:4])
+check("the renamed row was replaced, not duplicated",
+      "vocational" not in saved_ids and "LOCAL_ROW" in saved_ids, saved_ids[:4])
+
+# --- a brand new database (F01)
+NEW_DIR = os.path.join(WORK, "new")
+os.makedirs(NEW_DIR, exist_ok=True)
+NEW = os.path.join(NEW_DIR, "Fresh.cdb")
+
+evaluate("__palacedb.run('newDatabase')")
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'Untitled'", 20)
+check("new database opens untitled", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+check("new database has no tables",
+      evaluate("__palacedb.state.document.sheets.length") == 0,
+      evaluate("__palacedb.state.document.sheets.length"))
+check("new database is unsaved",
+      evaluate("__palacedb.state.document.dirty") is True, evaluate("document.title"))
+check("grid explains there is no table yet",
+      evaluate("!document.getElementById('gridEmpty').classList.contains('hidden')"))
+scratch = evaluate("__palacedb.state.document.path")
+check("a new database only borrows a scratch path",
+      bool(scratch)
+      and os.path.normcase(os.path.normpath(scratch)).startswith(
+          os.path.normcase(os.path.normpath(DATA_DIR)))
+      and not os.path.exists(scratch), scratch)
+
+# Saving a new database has to pick a file first; the automation hook supplies one.
+evaluate("__palacedb.send('saveAs', {path: %s})" % json.dumps(NEW))
+ok = wait_for_file(NEW, 12)
+check("saving the new database created the file", ok, os.listdir(NEW_DIR))
+check("the new database is no longer untitled",
+      evaluate("__palacedb.state.document.name") == "Fresh.cdb",
+      evaluate("__palacedb.state.document.name"))
+check("the saved new database is clean",
+      evaluate("__palacedb.state.document.dirty") is False, evaluate("document.title"))
+if os.path.exists(NEW):
+    fresh = json.load(open(NEW, encoding="utf-8"))
+    check("the saved new database is a valid empty model",
+          isinstance(fresh, dict) and not fresh.get("sheets"), list(fresh)[:5])
+else:
+    check("the saved new database is a valid empty model", False, "missing file")
+
+# --- a brand new database has to accept its first table
+evaluate("__palacedb.send('addSheet', {name:'First'})")
+ok = wait_for("__palacedb.state.document.sheets.length === 1", 15)
+check("a new database accepts its first table", ok,
+      evaluate("__palacedb.state.document.sheets.map(s=>s.name).join(',')"))
+check("the empty-state hint goes away",
+      evaluate("document.getElementById('gridEmpty').classList.contains('hidden')") is True)
+check("the first table is selected", evaluate("__palacedb.state.currentSheet") == "First")
+check("the first table gets an id column",
+      evaluate("__palacedb.grid.columns.map(c=>c.name+':'+c.type).join(',')") == "id:Id",
+      evaluate("__palacedb.grid.columns.map(c=>c.name+':'+c.type).join(',')"))
+
+evaluate("__palacedb.send('insertRow', {sheet:'First', row:0})")
+ok = wait_for("__palacedb.grid.rowCount === 1", 15)
+check("the first table accepts a row", ok, evaluate("__palacedb.grid.rowCount"))
+
+# Save so the document is clean again before the next open.
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+ok = wait_for("__palacedb.state.document.dirty === false", 10)
+check("the new database saves once it has content", ok, evaluate("document.title"))
+saved_new = json.load(open(NEW, encoding="utf-8"))
+check("the saved new database holds the table",
+      [s.get("name") for s in saved_new.get("sheets", [])] == ["First"],
+      saved_new.get("sheets"))
+
+# --- dropping a file onto the window
+# The real drag is OLE-level and cannot be produced over DevTools, so the suite drives
+# the same handler the window's Drop event calls.
+DROP_DIR = os.path.join(WORK, "drop")
+os.makedirs(DROP_DIR, exist_ok=True)
+DROPPED = os.path.join(DROP_DIR, "Dropped.cdb")
+shutil.copy(SOURCE, DROPPED)
+NOT_A_DB = os.path.join(DROP_DIR, "notes.txt")
+with open(NOT_A_DB, "w", encoding="utf-8") as handle:
+    handle.write("not a database")
+
+evaluate("__palacedb.send('simulateDrop', {files: %s})" % json.dumps([NOT_A_DB]))
+time.sleep(0.8)
+check("a drop without a database opens nothing",
+      evaluate("__palacedb.state.document.name") == "Fresh.cdb",
+      evaluate("__palacedb.state.document.name"))
+
+# A mixed selection must still find the database inside it.
+evaluate("__palacedb.send('simulateDrop', {files: %s})" % json.dumps([NOT_A_DB, DROPPED]))
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'Dropped.cdb'", 20)
+check("dropping a database opens it", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+check("a dropped database is editable",
+      evaluate("__palacedb.state.document.readOnly") is False,
+      evaluate("__palacedb.state.document.readOnly"))
+
+# --- row numbers along the left edge
+evaluate("__palacedb.grid.body.scrollTop = 0")
+time.sleep(0.4)
+gutter = evaluate("""(() => {
+  const cells = [...document.querySelectorAll('.gutter-cell')];
+  const first = cells[0];
+  const row = document.querySelector('.grid-row');
+  return {
+    count: cells.length,
+    text: first ? first.textContent : null,
+    top: first ? first.getBoundingClientRect().top : null,
+    rowTop: row ? row.getBoundingClientRect().top : null,
+  };
+})()""")
+check("the gutter numbers every visible row",
+      gutter and gutter["count"] > 3 and gutter["text"] == "1", gutter)
+check("a row number lines up with its row",
+      gutter and abs(gutter["top"] - gutter["rowTop"]) <= 1, gutter)
+
+evaluate("""(() => {
+  const cell = document.querySelector('.gutter-cell[data-row="2"]');
+  cell.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+  return true;
+})()""")
+time.sleep(0.5)
+rowsel = evaluate("""(() => {
+  const b = __palacedb.grid.selectionBounds();
+  return {top: b.top, bottom: b.bottom, left: b.left, right: b.right,
+          cols: __palacedb.grid.columns.length,
+          cursor: __palacedb.grid.cursor};
+})()""")
+check("clicking a row number selects that row",
+      rowsel and rowsel["top"] == 2 and rowsel["bottom"] == 2, rowsel)
+check("the row selection spans every column",
+      rowsel and rowsel["left"] == 0 and rowsel["right"] == rowsel["cols"] - 1, rowsel)
+check("the cursor stays on the first cell of the row",
+      rowsel and rowsel["cursor"]["row"] == 2 and rowsel["cursor"]["col"] == 0, rowsel)
+check("the selected row number is highlighted",
+      evaluate("!!document.querySelector('.gutter-cell.selected')") is True)
+
+# --- collapsing the table list frees the horizontal space
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'b', ctrlKey:true, bubbles:true}))")
+time.sleep(0.5)
+collapsed = evaluate("""(() => {
+  const side = document.getElementById('sidebar');
+  const expand = document.getElementById('sidebarExpand');
+  return {
+    display: getComputedStyle(side).display,
+    width: side.getBoundingClientRect().width,
+    expandVisible: expand.getBoundingClientRect().width > 0,
+  };
+})()""")
+check("a collapsed table list takes no space",
+      collapsed and collapsed["display"] == "none" and collapsed["width"] == 0, collapsed)
+check("the toolbar offers a way back", collapsed and collapsed["expandVisible"] is True, collapsed)
+
+evaluate("document.getElementById('sidebarExpand').click()")
+time.sleep(0.5)
+restored_side = evaluate("""(() => {
+  const side = document.getElementById('sidebar');
+  return {display: getComputedStyle(side).display, width: side.getBoundingClientRect().width};
+})()""")
+check("the toolbar button brings the table list back",
+      restored_side and restored_side["display"] != "none" and restored_side["width"] > 100,
+      restored_side)
+
+# --- validation problems reach the status bar with table and row
+id_name = evaluate("""(() => {
+  const c = __palacedb.grid.columns.find(c => c.type === 'Id');
+  return c ? c.name : null;
+})()""")
+if id_name:
+    first_id = evaluate("__palacedb.grid.cellValue(0,0).t")
+    evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, "
+             f"row: 1, column: {json.dumps(id_name)}, text: {json.dumps(first_id)}}})")
+    ok = wait_for("!document.getElementById('statusIssue').hidden", 10)
+    text = evaluate("document.getElementById('statusIssue').textContent")
+    check("a duplicate id is reported in the status bar", ok, text)
+    # Both rows carrying the id are marked #DUP, and the status line names the first of
+    # them, so the report is deterministic rather than dependent on where the edit was.
+    check("the report names the table and the row",
+          bool(text) and "Row 1" in text and evaluate("__palacedb.state.currentSheet") in text, text)
+
+    # Clearing the value must remove the message again.
+    evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, "
+             f"row: 1, column: {json.dumps(id_name)}, text: 'DUP_FIXED'}})")
+    ok = wait_for("document.getElementById('statusIssue').hidden", 10)
+    check("the status line clears once the problem is gone", ok,
+          evaluate("document.getElementById('statusIssue').textContent"))
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+    time.sleep(0.6)
+
+# --- every column type, on a real file with images and files next to it
+FOOD_DIR = os.path.join(WORK, "food")
+os.makedirs(FOOD_DIR, exist_ok=True)
+FOOD = os.path.join(FOOD_DIR, "food.cdb")
+shutil.copy(os.path.join(FIXTURES, "food.cdb"), FOOD)
+for folder in ("food_img", "file"):
+    shutil.copytree(os.path.join(FIXTURES, folder), os.path.join(FOOD_DIR, folder))
+
+evaluate("__palacedb.send('simulateDrop', {files: %s})" % json.dumps([FOOD]))
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'food.cdb'", 20)
+check("the type test file opens", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+ok = wait_for("__palacedb.grid.cache.size > 0 && __palacedb.grid.columns.length >= 10", 15)
+check("the type test file has every column type", ok, evaluate("__palacedb.grid.columns.length"))
+
+
+def column_index(name):
+    return evaluate("__palacedb.grid.columns.findIndex(c => c.name === %s)" % json.dumps(name))
+
+
+def mouse_event(x, y, kind, clicks=1):
+    """Sends one mouse event without waiting: the next evaluate() consumes the ack."""
+    counter[0] += 1
+    ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchMouseEvent",
+                        "params": {"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks}}))
+
+
+def double_click(row, column):
+    evaluate("__palacedb.grid.moveCursor(%d, %d)" % (row, column))
+    time.sleep(0.25)
+    point = evaluate("""(() => {
+      const c = document.querySelector('#gridRows .cell[data-row="%d"][data-col="%d"]');
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      return {x: Math.round(r.x + 20), y: Math.round(r.y + 12)};
+    })()""" % (row, column))
+    if not point:
+        return False
+    for clicks in (1, 2):
+        mouse_event(point["x"], point["y"], "mousePressed", clicks)
+        mouse_event(point["x"], point["y"], "mouseReleased", clicks)
+        time.sleep(0.06)
+    time.sleep(0.5)
+    return True
+
+
+def press_key(key, code, vk):
+    for kind in ("rawKeyDown", "keyUp"):
+        counter[0] += 1
+        ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchKeyEvent",
+                            "params": {"type": kind, "key": key, "code": code,
+                                       "windowsVirtualKeyCode": vk}}))
+    time.sleep(0.15)
+
+
+def press_ctrl(key, code, vk):
+    """A Ctrl-modified key press, the way a user copies and pastes."""
+    for kind in ("rawKeyDown", "keyUp"):
+        counter[0] += 1
+        ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchKeyEvent",
+                            "params": {"type": kind, "key": key, "code": code,
+                                       "windowsVirtualKeyCode": vk, "modifiers": 2}}))
+    time.sleep(0.3)
+
+
+def type_char(ch):
+    counter[0] += 1
+    ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchKeyEvent",
+                        "params": {"type": "char", "text": ch}}))
+    time.sleep(0.25)
+
+
+def click_cell(row, column):
+
+    """A real single click on a cell, so the click handler runs as it does for a user."""
+    evaluate("__palacedb.grid.moveCursor(%d, %d)" % (row, column))
+    time.sleep(0.25)
+    point = evaluate("""(() => {
+      const c = document.querySelector('#gridRows .cell[data-row="%d"][data-col="%d"]');
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      return {x: Math.round(r.x + 20), y: Math.round(r.y + 12)};
+    })()""" % (row, column))
+    if not point:
+        return False
+    mouse_event(point["x"], point["y"], "mousePressed")
+    mouse_event(point["x"], point["y"], "mouseReleased")
+    time.sleep(0.5)
+    return True
+
+
+def commit_editor(value):
+    evaluate("""(() => {
+      const input = document.querySelector('.editor-input');
+      if (!input) return false;
+      input.value = %s;
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+      return true;
+    })()""" % json.dumps(value))
+    time.sleep(0.7)
+
+
+# Text: a real double click opens the editor, with a caret rather than a full selection.
+text_col = column_index("dis")
+check("double click opens the text editor", double_click(1, text_col))
+caret = evaluate("""(() => {
+  const input = document.querySelector('.editor-input');
+  if (!input) return null;
+  return {focused: document.activeElement === input, start: input.selectionStart,
+          end: input.selectionEnd, length: input.value.length, text: input.value};
+})()""")
+check("the editor takes the focus", caret and caret["focused"] is True, caret)
+check("the editor shows a caret instead of selecting everything",
+      caret and caret["start"] == caret["end"] == caret["length"], caret)
+commit_editor("Beef patty")
+check("text committed", evaluate("__palacedb.grid.cellValue(1,%d).t" % text_col) == "Beef patty",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % text_col))
+
+# Int
+int_col = column_index("value")
+evaluate("__palacedb.editor.begin(1, %d)" % int_col)
+time.sleep(0.3)
+commit_editor("77")
+check("int committed", evaluate("__palacedb.grid.cellValue(1,%d).t" % int_col) == "77",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % int_col))
+
+# Bool: double click toggles in place.
+bool_col = column_index("cookable")
+before_bool = evaluate("__palacedb.grid.cellValue(1,%d).t" % bool_col)
+double_click(1, bool_col)
+after_bool = evaluate("__palacedb.grid.cellValue(1,%d).t" % bool_col)
+check("double click toggles a boolean", before_bool != after_bool, (before_bool, after_bool))
+
+# Color: a palette, and the cell paints the colour instead of its hex value.
+color_col = column_index("color")
+evaluate("__palacedb.editor.begin(1, %d)" % color_col)
+time.sleep(0.4)
+check("the colour popup offers a palette",
+      evaluate("document.querySelectorAll('.color-swatch').length") >= 12,
+      evaluate("document.querySelectorAll('.color-swatch').length"))
+evaluate("""(() => {
+  const swatch = document.querySelectorAll('.color-swatch')[7];
+  swatch.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+  return 1;
+})()""")
+time.sleep(0.7)
+check("a palette colour lands in the cell",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % color_col) == "#dc2626",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % color_col))
+check("the cell paints the colour, not the value",
+      evaluate("""(() => {
+        const c = document.querySelector('.cell[data-row="1"][data-col="%d"]');
+        const s = c && c.querySelector('.cell-swatch');
+        return s ? getComputedStyle(s).backgroundColor : null;
+      })()""" % color_col) == "rgb(220, 38, 38)",
+      evaluate("""(() => {
+        const c = document.querySelector('.cell[data-row="1"][data-col="%d"]');
+        return c ? c.textContent : null;
+      })()""" % color_col))
+
+# Reference: typing filters the list, Enter takes the match.
+ref_col = column_index("type")
+evaluate("__palacedb.editor.begin(1, %d)" % ref_col)
+ok = wait_for("document.querySelectorAll('.ref-dropdown .dropdown-item').length > 0", 10)
+check("the reference editor lists the rows of the other table", ok,
+      evaluate("document.querySelectorAll('.ref-dropdown .dropdown-item').length"))
+evaluate("""(() => {
+  const input = document.querySelector('.editor-input');
+  input.value = 'B';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  return 1;
+})()""")
+time.sleep(0.3)
+check("typing narrows the reference list",
+      evaluate("Array.from(document.querySelectorAll('.ref-dropdown .dropdown-label')).map(e => e.textContent).join('|')") == "B",
+      evaluate("Array.from(document.querySelectorAll('.ref-dropdown .dropdown-label')).map(e => e.textContent).join('|')"))
+evaluate("""(() => {
+  const input = document.querySelector('.editor-input');
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+  return 1;
+})()""")
+time.sleep(0.7)
+check("the highlighted reference is committed",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % ref_col) == "B",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % ref_col))
+
+# Flags: the checkboxes write names, not a bit mask.
+flags_col = column_index("flags")
+evaluate("__palacedb.editor.begin(1, %d)" % flags_col)
+time.sleep(0.4)
+check("the flags popup lists every flag",
+      evaluate("document.querySelectorAll('.cell-dropdown input[type=checkbox]').length") == 3,
+      evaluate("document.querySelectorAll('.cell-dropdown input[type=checkbox]').length"))
+evaluate("""(() => {
+  const box = document.querySelectorAll('.cell-dropdown input[type=checkbox]')[2];
+  box.checked = true;
+  box.dispatchEvent(new Event('change', {bubbles: true}));
+  return 1;
+})()""")
+time.sleep(0.7)
+check("flags keep the names that are set",
+      "dairy" in (evaluate("__palacedb.grid.cellValue(1,%d).t" % flags_col) or ""),
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % flags_col))
+
+# Enum: picking a label stores that label, and typing a number means the label too.
+# The sample is a scratch file and no longer carries an enum column of its own, so one is
+# added here: the popup is what is under test, not the shape of the fixture.
+enum_col = column_index("rank")
+if enum_col < 0:
+    # Appended, not inserted: the checks that follow address the first column by position.
+    evaluate("__palacedb.send('addColumn', {sheet: __palacedb.state.currentSheet, index: %d, "
+             "name: 'e2e_enum', type: '5:1,2,3'})" % evaluate("__palacedb.grid.columns.length"))
+    check("an enum column can be added for the test",
+          wait_for("__palacedb.grid.columns.some(c => c.name === 'e2e_enum')", 10),
+          evaluate("__palacedb.grid.columns.map(c => c.name).join(',')"))
+    enum_col = column_index("e2e_enum")
+ENUM_NAME = evaluate("__palacedb.grid.columns[%d].name" % enum_col)
+evaluate("__palacedb.editor.begin(1, %d)" % enum_col)
+time.sleep(0.4)
+check("the enum popup lists the labels",
+      evaluate("Array.from(document.querySelectorAll('.cell-dropdown .dropdown-label')).map(e => e.textContent).join('|')") == "1|2|3",
+      evaluate("Array.from(document.querySelectorAll('.cell-dropdown .dropdown-label')).map(e => e.textContent).join('|')"))
+evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('.cell-dropdown .dropdown-item')).find(e => e.textContent.trim() === '3');
+  if (!item) return 'missing';
+  item.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+  return 'ok';
+})()""")
+time.sleep(0.7)
+check("picking an enum label stores that label",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % enum_col) == "3",
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % enum_col))
+evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, row: 2, column: %s, text: '1'})"
+         % json.dumps(ENUM_NAME))
+time.sleep(0.7)
+check("typing a number picks the label, not the index",
+      evaluate("__palacedb.grid.cellValue(2,%d).t" % enum_col) == "1",
+      evaluate("__palacedb.grid.cellValue(2,%d).t" % enum_col))
+
+# --- editing an enum column must not rewrite its values
+# "5:,A,B" is an enum whose first value is empty. Re-encoding the text on every visit to
+# the dialog used to drop that entry, which moves every stored index onto another label and
+# leaves the column no longer matching the template it was built from.
+evaluate("__palacedb.send('addColumn', {sheet: __palacedb.state.currentSheet, index: %d, "
+         "name: 'e2e_enum_keep', type: '5:,A,B'})" % evaluate("__palacedb.grid.columns.length"))
+check("an enum with an empty first value can be added",
+      wait_for("__palacedb.grid.columns.some(c => c.name === 'e2e_enum_keep')", 10),
+      evaluate("__palacedb.grid.columns.map(c => c.name).join(',')"))
+KEEP_COL = column_index("e2e_enum_keep")
+
+KEEP_TYPE = """(() => {
+  const sheet = __palacedb.state.document.sheets.find(s => s.name === __palacedb.state.currentSheet);
+  const column = sheet && sheet.columns.find(c => c.name === 'e2e_enum_keep');
+  return column ? column.typeStr : null;
+})()"""
+
+open_header_menu(KEEP_COL)
+click_menu_item('Edit Column')
+time.sleep(0.6)
+check("the column dialog shows the values as they are stored",
+      evaluate("""(() => {
+        const inputs = Array.from(document.querySelectorAll('#modal .form-input'))
+          .filter(i => i.tagName === 'INPUT' && i.type === 'text');
+        return inputs.length > 1 ? inputs[1].value : null;
+      })()""") == ",A,B",
+      evaluate("""(() => {
+        const inputs = Array.from(document.querySelectorAll('#modal .form-input'))
+          .filter(i => i.tagName === 'INPUT' && i.type === 'text');
+        return inputs.length > 1 ? inputs[1].value : null;
+      })()"""))
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(1.0)
+check("editing an enum column without touching it keeps its values", evaluate(KEEP_TYPE) == "5:,A,B",
+      evaluate(KEEP_TYPE))
+
+open_header_menu(KEEP_COL)
+click_menu_item('Edit Column')
+time.sleep(0.6)
+evaluate("""(() => {
+  const inputs = Array.from(document.querySelectorAll('#modal .form-input'))
+    .filter(i => i.tagName === 'INPUT' && i.type === 'text');
+  const field = inputs[1];
+  field.value = field.value + ',C';
+  field.dispatchEvent(new Event('input', {bubbles: true}));
+  return field.value;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(1.0)
+check("adding a value keeps the empty first entry", evaluate(KEEP_TYPE) == "5:,A,B,C", evaluate(KEEP_TYPE))
+
+for _ in range(2):
+    evaluate("__palacedb.send('undo')")
+    time.sleep(0.5)
+check("the enum value checks are undone",
+      wait_for("!__palacedb.grid.columns.some(c => c.name === 'e2e_enum_keep')", 10),
+      evaluate("__palacedb.grid.columns.map(c => c.name).join(',')"))
+
+# Image and File: the browser result reaches the cell even though the dialog stole the focus.
+image_col = column_index("icon")
+if image_col < 0:
+    image_col = column_index("Icon")
+# Start from an empty image cell: a marker must not be offered as its text.
+evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, row: 1, "
+         "column: __palacedb.grid.columns[%d].name, text: ''})" % image_col)
+time.sleep(0.6)
+evaluate("__palacedb.editor.begin(1, %d)" % image_col)
+time.sleep(0.4)
+check("an empty image starts blank instead of showing a marker",
+      evaluate("document.querySelector('.editor-input') && document.querySelector('.editor-input').value") == "",
+      evaluate("document.querySelector('.editor-input') && document.querySelector('.editor-input').value"))
+evaluate("""(() => {
+  const editor = __palacedb.editor;
+  editor.browsing = {row: 1, col: %d, column: __palacedb.grid.columns[%d]};
+  editor.applyBrowseResult('food_img/2. Beef.png');
+  return 1;
+})()""" % (image_col, image_col))
+ok = wait_for("__palacedb.grid.cellValue(1,%d).t === 'food_img/2. Beef.png'" % image_col, 10)
+check("the chosen image path lands in the cell", ok,
+      evaluate("__palacedb.grid.cellValue(1,%d).t" % image_col))
+check("the image cell shows a thumbnail",
+      evaluate("!!document.querySelector('.cell[data-row=\"1\"][data-col=\"%d\"] .cell-thumb')" % image_col) is True)
+
+file_col = column_index("file")
+evaluate("__palacedb.editor.begin(2, %d)" % file_col)
+time.sleep(0.4)
+evaluate("""(() => {
+  const editor = __palacedb.editor;
+  editor.browsing = {row: 2, col: %d, column: __palacedb.grid.columns[%d]};
+  editor.applyBrowseResult('file/meat.txt');
+  return 1;
+})()""" % (file_col, file_col))
+ok = wait_for("__palacedb.grid.cellValue(2,%d).t === 'file/meat.txt'" % file_col, 10)
+check("the chosen file path lands in the cell", ok,
+      evaluate("__palacedb.grid.cellValue(2,%d).t" % file_col))
+
+# The picker closes the editor; the answer still has to find its cell.
+evaluate("__palacedb.editor.begin(2, %d)" % image_col)
+time.sleep(0.3)
+evaluate("""(() => {
+  __palacedb.editor.browsing = {row: 2, col: %d, column: __palacedb.grid.columns[%d]};
+  __palacedb.editor.commit();
+  return 1;
+})()""" % (image_col, image_col))
+time.sleep(0.3)
+evaluate("__palacedb.editor.applyBrowseResult('food_img/3. Egg.png')")
+ok = wait_for("__palacedb.grid.cellValue(2,%d).t === 'food_img/3. Egg.png'" % image_col, 10)
+check("a browse result lands even after the editor closed", ok,
+      evaluate("__palacedb.grid.cellValue(2,%d).t" % image_col))
+
+# Typing into an identifier cell opens the editor: the promoted proxy used to be left
+# behind in the corner of the grid, which looked like a ghost caret.
+evaluate("__palacedb.grid.moveCursor(1, 0)")
+time.sleep(0.3)
+type_char("Q")
+ok = wait_for("!!document.querySelector('.cell-editor .editor-input')", 10)
+check("typing into an identifier cell opens the editor", ok,
+      evaluate("document.activeElement && document.activeElement.className"))
+check("no stray input is left in the grid body",
+      evaluate("!document.querySelector('#gridBody > .editor-input')") is True,
+      evaluate("document.querySelector('#gridBody > .editor-input') && document.querySelector('#gridBody > .editor-input').className"))
+evaluate("__palacedb.editor.cancel()")
+time.sleep(0.3)
+
+# Arrow keys must keep the painted cursor on the real cursor.
+evaluate("__palacedb.grid.moveCursor(0, 0)")
+time.sleep(0.3)
+drift = []
+for _ in range(6):
+    press_key("ArrowDown", "ArrowDown", 40)
+    painted = evaluate("""(() => { const c = document.querySelector('.cell.cursor');
+      return c ? [Number(c.dataset.row), Number(c.dataset.col)] : null; })()""")
+    cursor = evaluate("[__palacedb.grid.cursor.row, __palacedb.grid.cursor.col]")
+    if painted != cursor:
+        drift.append((cursor, painted))
+check("the cursor box follows the arrow keys", not drift, drift)
+for _ in range(3):
+    press_key("ArrowRight", "ArrowRight", 39)
+painted = evaluate("""(() => { const c = document.querySelector('.cell.cursor');
+  return c ? [Number(c.dataset.row), Number(c.dataset.col)] : null; })()""")
+check("the cursor box follows horizontal moves",
+      painted == evaluate("[__palacedb.grid.cursor.row, __palacedb.grid.cursor.col]"), painted)
+
+# Copy and paste, cell to cell, for a colour and for an identifier.
+source_colour = evaluate("__palacedb.grid.cellValue(0, %d).t" % color_col)
+evaluate("__palacedb.send('copyCells', {sheet: __palacedb.state.currentSheet, rows: [0], columns: ['color'], cut: false})")
+time.sleep(0.4)
+evaluate("__palacedb.send('pasteCells', {sheet: __palacedb.state.currentSheet, row: 3, column: %d, mode: 'overwrite'})" % color_col)
+ok = wait_for("__palacedb.grid.cellValue(3,%d).t === %s" % (color_col, json.dumps(source_colour)), 10)
+check("a colour cell copies and pastes", ok,
+      evaluate("__palacedb.grid.cellValue(3,%d).t" % color_col))
+
+source_id = evaluate("__palacedb.grid.cellValue(0, 0).t")
+evaluate("__palacedb.send('copyCells', {sheet: __palacedb.state.currentSheet, rows: [0], columns: ['id'], cut: false})")
+time.sleep(0.4)
+evaluate("__palacedb.send('pasteCells', {sheet: __palacedb.state.currentSheet, row: 4, column: 0, mode: 'overwrite'})")
+# The pasted id now duplicates the source row, so the cell may show the #DUP marker.
+ok = wait_for("""(() => { const c = __palacedb.grid.cellValue(4,0);
+  return c && (c.t === %s || c.t === '#DUP(' + %s + ')'); })()""" % (json.dumps(source_id), json.dumps(source_id)), 10)
+check("an identifier cell copies and pastes", ok,
+      evaluate("__palacedb.grid.cellValue(4,0).t"))
+evaluate("__palacedb.send('undo')")
+time.sleep(0.4)
+
+# List: the column type was missing altogether; adding it must create the sub-table.
+evaluate("__palacedb.grid.moveCursor(1, 2)")
+time.sleep(0.2)
+evaluate("__palacedb.run('addColumn')")
+ok = wait_for("!document.getElementById('modal').hidden", 10)
+check("the add column dialog opens", ok)
+check("the type list offers a list column",
+      evaluate("Array.from(document.querySelectorAll('#modal select')[0].options).some(o => o.value === '8')") is True)
+evaluate("""(() => {
+  const inputs = document.querySelectorAll('#modal .form-row .form-input');
+  inputs[0].value = 'tags';
+  inputs[0].dispatchEvent(new Event('input', {bubbles: true}));
+  const typeSelect = document.querySelectorAll('#modal select')[0];
+  typeSelect.value = '8';
+  typeSelect.dispatchEvent(new Event('change', {bubbles: true}));
+  return 1;
+})()""")
+time.sleep(0.3)
+check("choosing a list reveals the field editor",
+      evaluate("!document.querySelector('#modal .form-sub').hidden") is True)
+evaluate("document.querySelector('#modal .form-sub-head .tool').click()")
+time.sleep(0.3)
+evaluate("""(() => {
+  const row = document.querySelector('#modal .form-sub-row');
+  const nameInput = row.querySelector('input');
+  nameInput.value = 'value';
+  nameInput.dispatchEvent(new Event('input', {bubbles: true}));
+  const typeSelect = row.querySelector('select');
+  typeSelect.value = '3';
+  typeSelect.dispatchEvent(new Event('change', {bubbles: true}));
+  return 1;
+})()""")
+time.sleep(0.3)
+evaluate("document.querySelector('#modal .form-sub-head .tool').click()")
+time.sleep(0.3)
+evaluate("""(() => {
+  const rows = document.querySelectorAll('#modal .form-sub-row');
+  const row = rows[rows.length - 1];
+  const nameInput = row.querySelector('input');
+  nameInput.value = 'kind';
+  nameInput.dispatchEvent(new Event('input', {bubbles: true}));
+  const selects = row.querySelectorAll('select');
+  selects[0].value = '6';
+  selects[0].dispatchEvent(new Event('change', {bubbles: true}));
+  return 1;
+})()""")
+time.sleep(0.4)
+check("a reference field asks for its target table",
+      evaluate("document.querySelectorAll('#modal .form-sub-row')[1].querySelectorAll('select').length") == 2,
+      evaluate("document.querySelectorAll('#modal .form-sub-row')[1].innerHTML.length"))
+evaluate("""(() => {
+  const row = document.querySelectorAll('#modal .form-sub-row')[1];
+  const selects = row.querySelectorAll('select');
+  selects[1].value = 'food_type';
+  selects[1].dispatchEvent(new Event('change', {bubbles: true}));
+  return 1;
+})()""")
+time.sleep(0.2)
+evaluate("document.getElementById('modalOk').click()")
+
+ok = wait_for("__palacedb.grid.columns.some(c => c.name === 'tags')", 10)
+check("the list column was added", ok,
+      evaluate("__palacedb.grid.columns.map(c => c.name + ':' + c.type).join(',')"))
+check("its hidden sub-table was created",
+      evaluate("JSON.stringify((__palacedb.state.document.subSheets || []).map(s => s.name))").find("foods@tags") >= 0,
+      evaluate("JSON.stringify(__palacedb.state.document.subSheets || [])"))
+
+list_col = column_index("tags")
+
+# A single click opens the sub-table right under the row; the rows below move down.
+row2_top_before = evaluate("""(() => { const r = document.querySelector('.grid-row[data-row="2"]');
+  return r ? Math.round(r.getBoundingClientRect().top) : null; })()""")
+evaluate("__palacedb.grid.moveCursor(1, %d)" % list_col)
+time.sleep(0.25)
+click_cell(1, list_col)
+ok = wait_for("!!document.querySelector('.sub-expansion')", 10)
+check("clicking a list cell opens its sub-table", ok)
+check("the sub-table is not a modal", evaluate("document.getElementById('modal').hidden") is True)
+
+panel_geometry = evaluate("""(() => {
+  const panel = document.querySelector('.sub-expansion');
+  const row = document.querySelector('#gridRows .grid-row[data-row="1"]');
+  const next = document.querySelector('#gridRows .grid-row[data-row="2"]');
+  if (!panel || !row || !next) return null;
+  return {
+    panelTop: Math.round(panel.getBoundingClientRect().top),
+    rowBottom: Math.round(row.getBoundingClientRect().bottom),
+    nextTop: Math.round(next.getBoundingClientRect().top),
+    panelBottom: Math.round(panel.getBoundingClientRect().bottom),
+  };
+})()""")
+check("the sub-table starts right under its row",
+      panel_geometry and abs(panel_geometry["panelTop"] - panel_geometry["rowBottom"]) <= 2,
+      panel_geometry)
+check("the rows below are pushed down by its height",
+      panel_geometry and panel_geometry["nextTop"] >= panel_geometry["panelBottom"] - 2
+      and panel_geometry["nextTop"] > row2_top_before,
+      (panel_geometry, row2_top_before))
+
+# It is a real grid: a header with the field names, row numbers and cells.
+check("the sub-table has a header with its fields",
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+               ".map(c => c.textContent).join('|')").startswith("value"),
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+               ".map(c => c.textContent).join('|')"))
+
+# A brand new list has no rows yet; the panel offers to add one without a dialog.
+check("an empty list offers a row",
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-tool'))"
+               ".some(b => b.textContent === '+ Row')") is True)
+
+
+def add_sub_row():
+    evaluate("""(() => {
+      const add = Array.from(document.querySelectorAll('.sub-expansion .sub-tool'))
+        .find(b => b.textContent === '+ Row');
+      if (!add) return false;
+      add.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      return true;
+    })()""")
+    time.sleep(0.5)
+
+
+add_sub_row()
+add_sub_row()
+check("the panel adds rows",
+      evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length") == 2,
+      evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length"))
+check("the sub-table numbers its rows",
+      evaluate("document.querySelectorAll('.sub-expansion .sub-gutter .gutter-cell').length") == 2,
+      evaluate("document.querySelectorAll('.sub-expansion .sub-gutter .gutter-cell').length"))
+check("the sub-table is built from grid cells, not form inputs",
+      evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row .cell').length") == 4,
+      evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row .cell').length"))
+
+
+def click_sub_cell(row, col, twice=False):
+    """A real click inside the open sub-table, at a cell of its own grid."""
+    point = evaluate("""(() => {
+      const c = document.querySelector('.sub-expansion .sub-body .cell[data-row="%d"][data-col="%d"]');
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      return {x: Math.round(r.x + 18), y: Math.round(r.y + 12)};
+    })()""" % (row, col))
+    if not point:
+        return False
+    clicks = (1, 2) if twice else (1,)
+    for count in clicks:
+        mouse_event(point["x"], point["y"], "mousePressed", count)
+        mouse_event(point["x"], point["y"], "mouseReleased", count)
+        time.sleep(0.06)
+    time.sleep(0.5)
+    return True
+
+
+# Typing in a sub-table cell writes through to the list stored in the cell above.
+check("double click opens a cell editor inside the sub-table", click_sub_cell(0, 0, twice=True)
+      and evaluate("!!document.querySelector('.sub-expansion .editor-input')") is True)
+evaluate("""(() => {
+  const input = document.querySelector('.sub-expansion .editor-input');
+  input.value = '42';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+  return true;
+})()""")
+ok = wait_for("(__palacedb.grid.cellValue(1,%d) || {}).t && __palacedb.grid.cellValue(1,%d).t.indexOf('42') === 0" % (list_col, list_col), 10)
+check("typing in the sub-table writes the cell", ok,
+      evaluate("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t" % (list_col, list_col)))
+check("no Done button is needed to keep the edit",
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion button')).every(b => b.textContent !== 'Done')") is True)
+
+# A reference field inside the list is a picker, not a text box.
+check("double click on a reference field opens its picker",
+      click_sub_cell(0, 1, twice=True)
+      and evaluate("!!document.querySelector('.sub-expansion .ref-dropdown')") is True)
+ok = wait_for("document.querySelectorAll('.sub-expansion .ref-dropdown .dropdown-item').length > 0", 10)
+check("the picker lists the rows of the target table", ok,
+      evaluate("document.querySelectorAll('.sub-expansion .ref-dropdown .dropdown-item').length"))
+evaluate("""(() => {
+  const items = document.querySelectorAll('.sub-expansion .ref-dropdown .dropdown-item');
+  if (!items.length) return false;
+  items[items.length - 1].dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+  return true;
+})()""")
+ok = wait_for("(__palacedb.grid.cellValue(1,%d) || {}).t && __palacedb.grid.cellValue(1,%d).t.indexOf('B') >= 0" % (list_col, list_col), 10)
+check("a reference inside a list can be picked", ok,
+      evaluate("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t" % (list_col, list_col)))
+
+# A row can be added from the panel and it grows with it.
+rows_before = evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length")
+height_before = evaluate("Math.round(document.querySelector('.sub-expansion').getBoundingClientRect().height)")
+add_sub_row()
+check("the panel adds a row",
+      evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length") == rows_before + 1,
+      evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length"))
+check("the panel grows with the new row",
+      evaluate("Math.round(document.querySelector('.sub-expansion').getBoundingClientRect().height)") > height_before,
+      (height_before, evaluate("Math.round(document.querySelector('.sub-expansion').getBoundingClientRect().height)")))
+
+# Keyboard inside the sub-table must not move the cursor of the table above.
+click_sub_cell(0, 0)
+main_before = evaluate("JSON.stringify(__palacedb.grid.cursor)")
+sub_before = evaluate("""(() => {
+  const c = document.querySelector('.sub-expansion .cell.cursor');
+  return c ? Number(c.dataset.row) : null;
+})()""")
+press_key("ArrowDown", "ArrowDown", 40)
+time.sleep(0.3)
+check("the arrows inside the sub-table leave the main cursor alone",
+      evaluate("JSON.stringify(__palacedb.grid.cursor)") == main_before,
+      (main_before, evaluate("JSON.stringify(__palacedb.grid.cursor)")))
+check("the arrows move the sub-table cursor instead",
+      evaluate("""(() => {
+        const c = document.querySelector('.sub-expansion .cell.cursor');
+        return c ? Number(c.dataset.row) : null;
+      })()""") == (sub_before + 1 if sub_before is not None else None),
+      (sub_before, evaluate("""(() => {
+        const c = document.querySelector('.sub-expansion .cell.cursor');
+        return c ? Number(c.dataset.row) : null;
+      })()""")))
+
+# A second list can be open at the same time.
+evaluate("__palacedb.grid.moveCursor(2, %d)" % list_col)
+time.sleep(0.25)
+click_cell(2, list_col)
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 2", 10)
+check("two lists can be open at once", ok,
+      evaluate("document.querySelectorAll('.sub-expansion').length"))
+check("the second panel starts under its own row",
+      evaluate("""(() => {
+        const panels = document.querySelectorAll('.sub-expansion');
+        if (panels.length < 2) return null;
+        const row = document.querySelector('#gridRows .grid-row[data-row="2"]');
+        return Math.abs(Math.round(panels[1].getBoundingClientRect().top)
+                        - Math.round(row.getBoundingClientRect().bottom));
+      })()""") is not None
+      and evaluate("""(() => {
+        const panels = document.querySelectorAll('.sub-expansion');
+        const row = document.querySelector('#gridRows .grid-row[data-row="2"]');
+        return Math.abs(Math.round(panels[1].getBoundingClientRect().top)
+                        - Math.round(row.getBoundingClientRect().bottom)) <= 2;
+      })()""") is True)
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.5)
+food_saved = json.load(open(FOOD, encoding="utf-8"))
+first_line = food_saved["sheets"][0]["lines"][1]
+check("the list is written to the file as an array",
+      isinstance(first_line.get("tags"), list)
+      and first_line["tags"][0].get("value") == 42
+      and first_line["tags"][0].get("kind") == "B",
+      first_line.get("tags"))
+check("the sub-table is saved hidden",
+      any(s.get("name") == "foods@tags" and (s.get("props") or {}).get("hide") for s in food_saved["sheets"]),
+      [s.get("name") for s in food_saved["sheets"]])
+
+# Clicking the same cell again closes that panel only, and gives the space back.
+evaluate("__palacedb.grid.moveCursor(1, %d)" % list_col)
+time.sleep(0.25)
+click_cell(1, list_col)
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 1", 10)
+check("clicking the cell again closes its sub-table", ok,
+      evaluate("document.querySelectorAll('.sub-expansion').length"))
+
+evaluate("__palacedb.grid.moveCursor(2, %d)" % list_col)
+time.sleep(0.25)
+click_cell(2, list_col)
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 0", 10)
+check("the last panel closes too", ok,
+      evaluate("document.querySelectorAll('.sub-expansion').length"))
+# Rows grow to fit wrapped text, so an absolute top captured before the panels opened is
+# no longer the invariant: what must hold is that row 2 sits directly under row 1 again,
+# with no space left where the panel was. A separator strip between them is not leftover
+# space: it is one row of its own and is subtracted here.
+check("the rows move back up",
+      evaluate("""(() => {
+        const first = document.querySelector('#gridRows .grid-row[data-row="1"]');
+        const second = document.querySelector('#gridRows .grid-row[data-row="2"]');
+        if (!first || !second) return null;
+        const strip = document.querySelector('.sep-band[data-sep="2"]');
+        const stripHeight = strip ? Math.round(strip.getBoundingClientRect().height) : 0;
+        return Math.abs(Math.round(second.getBoundingClientRect().top)
+                        - Math.round(first.getBoundingClientRect().bottom) - stripHeight);
+      })()""") == 0,
+      evaluate("""(() => {
+        const first = document.querySelector('#gridRows .grid-row[data-row="1"]');
+        const second = document.querySelector('#gridRows .grid-row[data-row="2"]');
+        if (!first || !second) return null;
+        return Math.round(second.getBoundingClientRect().top)
+               - Math.round(first.getBoundingClientRect().bottom);
+      })()"""))
+
+# --- an open list replaces its value with a marker
+evaluate("__palacedb.grid.moveCursor(1, %d)" % list_col)
+time.sleep(0.25)
+click_cell(1, list_col)
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 1", 10)
+marker = evaluate("""(() => {
+  const c = document.querySelector('#gridRows .cell[data-row="1"][data-col="%d"]');
+  return c ? c.textContent : null;
+})()""" % list_col)
+check("an open list shows a marker instead of its value", ok and marker == "\u2026", marker)
+check("the marker marks the cell as expanded",
+      evaluate("!!document.querySelector('#gridRows .cell.expanded')") is True)
+
+click_cell(1, list_col)
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 0", 10)
+restored = evaluate("""(() => {
+  const c = document.querySelector('#gridRows .cell[data-row="1"][data-col="%d"]');
+  return c ? c.textContent : null;
+})()""" % list_col)
+check("closing the list brings the value back", ok and restored != "\u2026", restored)
+
+# --- the fields of a list are edited from its own panel, and Apply takes effect
+click_cell(1, list_col)
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 1", 10)
+fields_before = evaluate("document.querySelectorAll('.sub-expansion .sub-head .head-cell').length")
+check("the panel reopens for the field test", ok and fields_before == 2, fields_before)
+
+evaluate("""(() => {
+  const button = Array.from(document.querySelectorAll('.sub-expansion .sub-tool'))
+    .find(b => b.textContent === 'Fields...');
+  if (!button) return false;
+  button.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  return true;
+})()""")
+ok = wait_for("!document.getElementById('modal').hidden", 10)
+check("Fields... opens the column dialog", ok)
+check("the dialog lists the fields of the list",
+      evaluate("document.querySelectorAll('#modal .form-sub-row').length") == fields_before,
+      evaluate("document.querySelectorAll('#modal .form-sub-row').length"))
+
+evaluate("""(() => {
+  const add = Array.from(document.querySelectorAll('#modal button'))
+    .find(b => b.textContent === '+ Add field');
+  add.click();
+  const rows = document.querySelectorAll('#modal .form-sub-row');
+  const input = rows[rows.length - 1].querySelector('input');
+  input.value = 'note';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  return true;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("document.querySelectorAll('.sub-expansion .sub-head .head-cell').length === %d"
+              % (fields_before + 1), 10)
+check("Apply adds the field to the open sub-table", ok,
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+               ".map(c => c.textContent).join('|')"))
+check("the new field is named in the header",
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+               ".some(c => c.textContent.indexOf('note') === 0)") is True,
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+               ".map(c => c.textContent).join('|')"))
+check("the values already in the list survive the new field",
+      evaluate("""(() => {
+        const c = document.querySelector('.sub-expansion .sub-body .cell[data-row="0"][data-col="0"]');
+        return c ? c.textContent : null;
+      })()""") == "42",
+      evaluate("""(() => {
+        const c = document.querySelector('.sub-expansion .sub-body .cell[data-row="0"][data-col="0"]');
+        return c ? c.textContent : null;
+      })()"""))
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.5)
+tags_sheet = [s for s in json.load(open(FOOD, encoding="utf-8"))["sheets"]
+              if s.get("name") == "foods@tags"]
+check("the new field is written to the file",
+      bool(tags_sheet) and [c.get("name") for c in tags_sheet[0]["columns"]] == ["value", "kind", "note"],
+      [c.get("name") for c in tags_sheet[0]["columns"]] if tags_sheet else None)
+
+# Renaming a field keeps the values it holds: the dialog carries the old name along.
+if evaluate("document.querySelectorAll('.sub-expansion').length") == 0:
+    click_cell(1, list_col)
+    wait_for("document.querySelectorAll('.sub-expansion').length === 1", 10)
+
+evaluate("""(() => {
+  const button = Array.from(document.querySelectorAll('.sub-expansion .sub-tool'))
+    .find(b => b.textContent === 'Fields...');
+  if (button) button.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  return true;
+})()""")
+ok = wait_for("!document.getElementById('modal').hidden", 10)
+evaluate("""(() => {
+  const row = document.querySelector('#modal .form-sub-row');
+  const input = row.querySelector('input');
+  input.value = 'amount';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  return true;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+              ".some(c => c.textContent.indexOf('amount') === 0)", 10)
+check("renaming a field renames the header", ok,
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+               ".map(c => c.textContent).join('|')"))
+check("renaming a field keeps the values under the new name",
+      evaluate("""(() => {
+        const c = document.querySelector('.sub-expansion .sub-body .cell[data-row="0"][data-col="0"]');
+        return c ? c.textContent : null;
+      })()""") == "42",
+      evaluate("""(() => {
+        const c = document.querySelector('.sub-expansion .sub-body .cell[data-row="0"][data-col="0"]');
+        return c ? c.textContent : null;
+      })()"""))
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.5)
+renamed_sheet = [s for s in json.load(open(FOOD, encoding="utf-8"))["sheets"]
+                 if s.get("name") == "foods@tags"]
+check("the renamed field is written to the file",
+      bool(renamed_sheet)
+      and [c.get("name") for c in renamed_sheet[0]["columns"]] == ["amount", "kind", "note"],
+      [c.get("name") for c in renamed_sheet[0]["columns"]] if renamed_sheet else None)
+
+# The value of the first record is still 42, now under 'amount'.
+values_ok = evaluate("""(() => {
+  const c = document.querySelector('.sub-expansion .sub-body .cell[data-row="0"][data-col="0"]');
+  return c ? c.textContent === '42' : false;
+})()""")
+check("the record still holds its value after the rename", values_ok is True)
+
+# Fields can be reordered from the same dialog.
+evaluate("""(() => {
+  const button = Array.from(document.querySelectorAll('.sub-expansion .sub-tool'))
+    .find(b => b.textContent === 'Fields...');
+  if (button) button.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  return true;
+})()""")
+ok = wait_for("!document.getElementById('modal').hidden", 10)
+evaluate("""(() => {
+  const row = document.querySelectorAll('#modal .form-sub-row')[0];
+  const buttons = row.querySelectorAll('button');
+  buttons[1].dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  return true;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+              ".every((c, i) => (i === 0) === (c.textContent.indexOf('kind') === 0))", 10)
+check("a field can be moved down in the dialog", ok,
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+               ".map(c => c.textContent).join('|')"))
+
+# --- the rows of a list can be reordered by dragging their row numbers too
+def sub_gutter_point(row):
+    return evaluate("""(() => {
+      const c = document.querySelector('.sub-expansion .sub-gutter .gutter-cell[data-row="%d"]');
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height * 0.75)};
+    })()""" % row)
+
+
+def drag_sub_row(from_row, to_row):
+    start = sub_gutter_point(from_row)
+    if not start:
+        return False
+    mouse_event(start["x"], start["y"], "mousePressed")
+    time.sleep(0.15)
+    end = sub_gutter_point(to_row)
+    if not end:
+        return False
+    for step in range(1, 5):
+        y = round(start["y"] + (end["y"] - start["y"]) * step / 4)
+        counter[0] += 1
+        ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchMouseEvent",
+                            "params": {"type": "mouseMoved", "x": end["x"], "y": y,
+                                       "button": "left", "buttons": 1}}))
+        time.sleep(0.08)
+    mouse_event(end["x"], end["y"], "mouseReleased")
+    time.sleep(1.0)
+    return True
+
+
+def sub_cell_text(row, col):
+    return evaluate("""(() => {
+      const c = document.querySelector('.sub-expansion .sub-body .cell[data-row="%d"][data-col="%d"]');
+      return c ? c.textContent : null;
+    })()""" % (row, col))
+
+
+if evaluate("document.querySelectorAll('.sub-expansion').length") == 0:
+    click_cell(1, list_col)
+    wait_for("document.querySelectorAll('.sub-expansion').length === 1", 10)
+
+sub_fields = evaluate("document.querySelectorAll('.sub-expansion .sub-head .head-cell').length")
+row0_before = [sub_cell_text(0, col) for col in range(sub_fields)]
+row1_before = [sub_cell_text(1, col) for col in range(sub_fields)]
+check("the first record holds a value before the drag", any(row0_before), row0_before)
+check("a list row can be dragged by its number", drag_sub_row(0, 1))
+row0_after = [sub_cell_text(0, col) for col in range(sub_fields)]
+row1_after = [sub_cell_text(1, col) for col in range(sub_fields)]
+check("the dragged record moved down in the list",
+      row1_after == row0_before and row0_after == row1_before,
+      (row0_before, row0_after, row1_after))
+
+# --- the Convert submenu survives the pointer moving onto it
+food_text_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Text')")
+convert_labels = open_convert(food_text_col)
+check("the column menu offers the Convert submenu",
+      convert_labels == 'lowercase|UPPERCASE|UpperIdent|lowerIdent', convert_labels)
+check("the submenu stays open when the pointer moves onto it",
+      evaluate("""(() => {
+        const item = document.querySelector('#subMenu .context-item');
+        if (!item) return false;
+        item.dispatchEvent(new MouseEvent('mouseenter'));
+        return !document.getElementById('subMenu').hidden;
+      })()""") is True)
+evaluate("""(() => {
+  document.getElementById('subMenu').hidden = true;
+  document.getElementById('contextMenu').hidden = true;
+  return true;
+})()""")
+
+# --- the row number is the handle that moves a row
+food_id_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Id')")
+evaluate("""(() => {
+  const close = Array.from(document.querySelectorAll('.sub-expansion .sub-close'));
+  close.forEach(b => b.dispatchEvent(new MouseEvent('click', {bubbles: true})));
+  return document.querySelectorAll('.sub-expansion').length;
+})()""")
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 0", 10)
+
+
+def gutter_point(row, half="center"):
+    return evaluate("""(() => {
+      const c = document.querySelector('#gridGutter .gutter-cell[data-row="%d"]');
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      const offset = %s;
+      return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height * offset)};
+    })()""" % (row, {"center": "0.5", "lower": "0.8"}[half]))
+
+
+drag_marks = None
+
+
+def drag_gutter(from_row, to_row):
+    """Presses a row number, drags it over another row and releases."""
+    global drag_marks
+    evaluate("__palacedb.grid.body.scrollTop = 0")
+    time.sleep(0.3)
+    start = gutter_point(from_row)
+    if not start:
+        return False
+    mouse_event(start["x"], start["y"], "mousePressed")
+    time.sleep(0.2)
+    # Selecting the row may scroll the table, so the target is measured afterwards.
+    end = gutter_point(to_row, "lower")
+    if not end:
+        return False
+    steps = 4
+    for step in range(1, steps + 1):
+        y = round(start["y"] + (end["y"] - start["y"]) * step / steps)
+        counter[0] += 1
+        ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchMouseEvent",
+                            "params": {"type": "mouseMoved", "x": end["x"], "y": y,
+                                       "button": "left", "buttons": 1}}))
+        time.sleep(0.08)
+    # The drag has to be visible while it happens, not only afterwards.
+    drag_marks = evaluate("""(() => ({
+      dragged: document.querySelectorAll('#gridGutter .gutter-cell.dragging').length,
+      drop: document.querySelectorAll('#gridGutter .gutter-cell.drop-before,'
+        + ' #gridGutter .gutter-cell.drop-after').length,
+    }))()""")
+    mouse_event(end["x"], end["y"], "mouseReleased")
+    time.sleep(1.0)
+    return True
+
+
+ids_before = [evaluate("(__palacedb.grid.cellValue(%d, %d) || {}).t" % (row, food_id_col))
+              for row in range(3)]
+check("dragging a row number moves the row", drag_gutter(1, 2)
+      and wait_for("(__palacedb.grid.cellValue(2, %d) || {}).t === %s"
+                   % (food_id_col, json.dumps(ids_before[1])), 10),
+      ids_before)
+ids_after = [evaluate("(__palacedb.grid.cellValue(%d, %d) || {}).t" % (row, food_id_col))
+             for row in range(3)]
+check("the dragged row landed where it was dropped",
+      ids_after[1] == ids_before[2] and ids_after[2] == ids_before[1], (ids_before, ids_after))
+check("the drag shows which row moves and where it will land",
+      drag_marks == {"dragged": 1, "drop": 1}, drag_marks)
+
+# Undo puts it back: the move is one step on the undo stack.
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+ok = wait_for("(__palacedb.grid.cellValue(1, %d) || {}).t === %s"
+              % (food_id_col, json.dumps(ids_before[1])), 10)
+check("undo puts the row back", ok,
+      [evaluate("(__palacedb.grid.cellValue(%d, %d) || {}).t" % (row, food_id_col))
+       for row in range(3)])
+
+# The same move from the keyboard, which is what the manual documents.
+evaluate("__palacedb.grid.moveCursor(1, 0)")
+time.sleep(0.3)
+evaluate("""document.getElementById('gridBody').dispatchEvent(
+  new KeyboardEvent('keydown', {key:'ArrowDown', ctrlKey:true, bubbles:true}))""")
+ok = wait_for("(__palacedb.grid.cellValue(2, %d) || {}).t === %s"
+              % (food_id_col, json.dumps(ids_before[1])), 10)
+check("Ctrl+Down moves the cursor row down", ok,
+      [evaluate("(__palacedb.grid.cellValue(%d, %d) || {}).t" % (row, food_id_col))
+       for row in range(3)])
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+ok = wait_for("(__palacedb.grid.cellValue(1, %d) || {}).t === %s"
+              % (food_id_col, json.dumps(ids_before[1])), 10)
+check("the keyboard move is undone too", ok,
+      [evaluate("(__palacedb.grid.cellValue(%d, %d) || {}).t" % (row, food_id_col))
+       for row in range(3)])
+
+# --- the row-number menu
+menu_point = gutter_point(1)
+mouse_event(menu_point["x"], menu_point["y"], "mousePressed")
+mouse_event(menu_point["x"], menu_point["y"], "mouseReleased")
+counter[0] += 1
+ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchMouseEvent",
+                    "params": {"type": "mousePressed", "x": menu_point["x"], "y": menu_point["y"],
+                               "button": "right", "clickCount": 1}}))
+counter[0] += 1
+ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchMouseEvent",
+                    "params": {"type": "mouseReleased", "x": menu_point["x"], "y": menu_point["y"],
+                               "button": "right", "clickCount": 1}}))
+time.sleep(0.6)
+
+menu_labels = evaluate("Array.from(document.querySelectorAll('#contextMenu .context-item'))"
+                       ".map(b => b.textContent)")
+check("right-clicking a row number opens its menu",
+      bool(menu_labels) and any("Insert Row Here" in label for label in menu_labels), menu_labels)
+check("the row menu offers paste, add and delete",
+      any("Paste" in label for label in menu_labels)
+      and any("Add Row" in label for label in menu_labels)
+      and any("Delete" in label for label in menu_labels), menu_labels)
+
+rows_before_menu = evaluate("__palacedb.grid.rowCount")
+evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+    .find(b => b.textContent.indexOf('Insert Row Here') === 0);
+  if (item) item.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  return true;
+})()""")
+ok = wait_for("__palacedb.grid.rowCount === %d" % (rows_before_menu + 1), 10)
+check("Insert Row Here adds a row", ok,
+      (rows_before_menu, evaluate("__palacedb.grid.rowCount")))
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+time.sleep(0.8)
+
+# --- the toolbar can add a column
+check("the toolbar has an Add Column button",
+      evaluate("!!document.querySelector('#toolbar [data-action=\"addColumn\"]')") is True)
+evaluate("document.querySelector('#toolbar [data-action=\"addColumn\"]')"
+         ".dispatchEvent(new MouseEvent('click', {bubbles: true}))")
+ok = wait_for("!document.getElementById('modal').hidden", 10)
+check("the button opens the add column dialog", ok)
+check("the dialog is the column form",
+      evaluate("document.getElementById('modalTitle').textContent") == "Add column",
+      evaluate("document.getElementById('modalTitle').textContent"))
+evaluate("document.getElementById('modalCancel').click()")
+time.sleep(0.3)
+check("the dialog can be cancelled", evaluate("document.getElementById('modal').hidden") is True)
+
+# --- the table name is edited in Table Settings, not in a menu of its own
+evaluate("""(() => {
+  const item = document.querySelector('#tableList .table-item');
+  item.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, clientX: 40, clientY: 80}));
+  return true;
+})()""")
+time.sleep(0.4)
+table_menu = evaluate("Array.from(document.querySelectorAll('#contextMenu .context-item'))"
+                      ".map(b => b.textContent)")
+check("the table menu has no separate rename entry",
+      not any('Rename Table' in label for label in table_menu), table_menu)
+check("it offers Table Settings instead",
+      any('Table Settings' in label for label in table_menu), table_menu)
+evaluate("document.body.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))")
+time.sleep(0.2)
+
+SETTINGS_SHEET = evaluate("__palacedb.state.currentSheet")
+evaluate("__palacedb.run('tableSettings')")
+check("Table Settings opens with a name field",
+      wait_for("!!document.querySelector('#modal .form-input')", 10))
+check("the name field holds the current name",
+      evaluate("document.querySelector('#modal .form-input').value") == SETTINGS_SHEET,
+      evaluate("document.querySelector('#modal .form-input').value"))
+evaluate("""(() => {
+  const input = document.querySelector('#modal .form-input');
+  input.value = 'RenamedHere';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  document.getElementById('modalOk').click();
+  return true;
+})()""")
+check("Table Settings renames the table",
+      wait_for("__palacedb.state.document.sheets.some(s => s.name === 'RenamedHere')", 10),
+      evaluate("__palacedb.state.document.sheets.map(s => s.name).join(',')"))
+check("the renamed table is still the one on screen",
+      evaluate("__palacedb.state.currentSheet") == 'RenamedHere',
+      evaluate("__palacedb.state.currentSheet"))
+
+# Put the name back so the rest of the run sees the sample unchanged.
+evaluate("__palacedb.send('renameSheet', {sheet: 'RenamedHere', name: %s})" % json.dumps(SETTINGS_SHEET))
+check("the name can be changed back",
+      wait_for("__palacedb.state.currentSheet === %s" % json.dumps(SETTINGS_SHEET), 10),
+      evaluate("__palacedb.state.currentSheet"))
+
+# --- the arrows stay inside a multi-line text while it is being edited
+TEXT_COL = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Text')")
+check("the sample has a text column to edit", TEXT_COL >= 0, TEXT_COL)
+evaluate("__palacedb.grid.moveCursor(0, %d)" % TEXT_COL)
+time.sleep(0.3)
+press_key("F2", "F2", 113)
+time.sleep(0.4)
+check("the text editor is open", evaluate("!!document.querySelector('.editor-input')") is True)
+check("it is a multi-line editor",
+      evaluate("document.querySelector('.editor-input').tagName") == "TEXTAREA",
+      evaluate("document.querySelector('.editor-input').tagName"))
+evaluate("""(() => {
+  const input = document.querySelector('.editor-input');
+  input.value = 'AAA\\nBBB';
+  input.setSelectionRange(0, 0);
+  return input.selectionStart;
+})()""")
+press_key("ArrowDown", "ArrowDown", 40)
+time.sleep(0.3)
+check("ArrowDown keeps the editor open", evaluate("!!document.querySelector('.editor-input')") is True)
+check("ArrowDown moves the caret to the next line",
+      evaluate("document.querySelector('.editor-input').selectionStart") == 4,
+      evaluate("document.querySelector('.editor-input').selectionStart"))
+check("ArrowDown does not move the cell cursor",
+      evaluate("__palacedb.grid.cursor.row") == 0,
+      evaluate("__palacedb.grid.cursor.row"))
+press_key("ArrowUp", "ArrowUp", 38)
+time.sleep(0.3)
+check("ArrowUp moves the caret back up inside the value",
+      evaluate("document.querySelector('.editor-input').selectionStart") == 0
+      and evaluate("!!document.querySelector('.editor-input')") is True,
+      evaluate("document.querySelector('.editor-input').selectionStart"))
+press_key("Escape", "Escape", 27)
+time.sleep(0.3)
+check("Escape still leaves the editor", evaluate("!document.querySelector('.editor-input')") is True)
+
+# --- the palette travels with the file, not with the preference
+# A private copy, because another window may hold the write slot of the sample database
+# by now and a read-only document does not write its side-car.
+PAL_DIR = os.path.join(WORK, "palette")
+os.makedirs(PAL_DIR, exist_ok=True)
+PAL_DB = os.path.join(PAL_DIR, "Palette.cdb")
+shutil.copy(CDB, PAL_DB)
+PAL_META = PAL_DB + ".meta.json"
+if os.path.exists(PAL_META):
+    os.remove(PAL_META)
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+time.sleep(1.5)
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(PAL_DB))
+check("a private copy of the database is open",
+      wait_for("!!__palacedb.state.document && __palacedb.state.document.path === %s"
+               % json.dumps(PAL_DB), 25) is True,
+      evaluate("(__palacedb.state.document || {}).path"))
+check("it is editable", evaluate("!__palacedb.state.document.readOnly") is True)
+
+evaluate("__palacedb.applySettings({uiFontSize: 15, gridFontSize: 14, scheme: 'mint'})")
+time.sleep(1.5)
+with open(PAL_META, encoding="utf-8") as handle:
+    meta = json.load(handle)
+check("the chosen palette reached the side-car",
+      (meta.get("appearance") or {}).get("scheme") == "mint", meta.get("appearance"))
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'w', ctrlKey:true, bubbles:true}))")
+time.sleep(1.5)
+check("closing the document leaves the welcome screen",
+      evaluate("!document.getElementById('welcome').classList.contains('hidden')") is True)
+
+# With no file open the palette is only a preference, and the side-car keeps its value.
+evaluate("__palacedb.applySettings({uiFontSize: 15, gridFontSize: 14, scheme: 'olive'})")
+time.sleep(0.8)
+with open(PAL_META, encoding="utf-8") as handle:
+    meta = json.load(handle)
+check("changing the preference with no file open leaves the side-car alone",
+      (meta.get("appearance") or {}).get("scheme") == "mint", meta.get("appearance"))
+
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(PAL_DB))
+check("reopening the file brings its own palette back",
+      wait_for("document.body.dataset.scheme === 'mint'", 25) is True,
+      evaluate("document.body.dataset.scheme"))
+
+
+# --- an enum value may have no label
+# ",A,B" is three values whose first one has no label. The blank has to survive the
+# dialog: dropping it moves every stored index onto the next label.
+evaluate("__palacedb.send('addColumn', {sheet: __palacedb.state.currentSheet, index: %d, "
+         "name: 'e2e_enum_blank', type: '5:A,B'})" % evaluate("__palacedb.grid.columns.length"))
+check("an enum without an unnamed value can be added",
+      wait_for("__palacedb.grid.columns.some(c => c.name === 'e2e_enum_blank')", 10),
+      evaluate("__palacedb.grid.columns.map(c => c.name).join(',')"))
+BLANK_COL = column_index('e2e_enum_blank')
+
+BLANK_TYPE = """(() => {
+  const sheet = __palacedb.state.document.sheets.find(s => s.name === __palacedb.state.currentSheet);
+  const column = sheet && sheet.columns.find(c => c.name === 'e2e_enum_blank');
+  return column ? column.typeStr : null;
+})()"""
+
+open_header_menu(BLANK_COL)
+click_menu_item('Edit Column')
+time.sleep(0.6)
+check("the values field says an entry may stay blank",
+      'blank' in (evaluate("(document.querySelector('#modal .values-hint') || {}).textContent || ''") or ""),
+      evaluate("(document.querySelector('#modal .values-hint') || {}).textContent"))
+evaluate("""(() => {
+  const inputs = Array.from(document.querySelectorAll('#modal .form-input'))
+    .filter(i => i.tagName === 'INPUT' && i.type === 'text');
+  const field = inputs[1];
+  field.value = ',' + field.value;
+  field.dispatchEvent(new Event('input', {bubbles: true}));
+  return field.value;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(1.0)
+check("typing a leading comma keeps the unnamed value",
+      evaluate(BLANK_TYPE) == "5:,A,B", evaluate(BLANK_TYPE))
+
+# The popup has to show it: an empty row is invisible and cannot be clicked.
+evaluate("__palacedb.editor.begin(1, %d)" % BLANK_COL)
+time.sleep(0.5)
+check("the popup names the unnamed value instead of leaving an empty row",
+      evaluate("Array.from(document.querySelectorAll('.cell-dropdown .dropdown-label'))"
+               ".map(e => e.textContent).join('|')") == "(empty)|A|B",
+      evaluate("Array.from(document.querySelectorAll('.cell-dropdown .dropdown-label'))"
+               ".map(e => e.textContent).join('|')"))
+evaluate("""(() => {
+  const item = document.querySelectorAll('.cell-dropdown .dropdown-item')[0];
+  if (!item) return 'missing';
+  item.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+  return 'ok';
+})()""")
+time.sleep(0.8)
+check("picking it stores the unnamed value",
+      evaluate("(__palacedb.grid.cellValue(1,%d) || {}).t" % BLANK_COL) == ""
+      and evaluate("(__palacedb.grid.cellValue(1,%d) || {}).s" % BLANK_COL) == "ok",
+      evaluate("JSON.stringify(__palacedb.grid.cellValue(1,%d))" % BLANK_COL))
+
+for _ in range(3):
+    evaluate("__palacedb.send('undo')")
+    time.sleep(0.4)
+check("the unnamed value checks are undone",
+      wait_for("!__palacedb.grid.columns.some(c => c.name === 'e2e_enum_blank')", 10),
+      evaluate("__palacedb.grid.columns.map(c => c.name).join(',')"))
+
+# --- text in a dialog can be selected and copied
+# The table owns Ctrl+C, so selecting an error message and pressing it used to paste the
+# selected cells instead of the message.
+evaluate("__palacedb.run('about')")
+check("the About dialog opens for the copy check",
+      wait_for("!document.getElementById('modal').hidden", 10),
+      evaluate("document.getElementById('modalTitle').textContent"))
+SELECTED = evaluate("""(() => {
+  const range = document.createRange();
+  range.selectNodeContents(document.getElementById('modalBody'));
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return selection.toString();
+})()""")
+check("text in a dialog can be selected", bool(SELECTED) and len(SELECTED) > 20,
+      (SELECTED or '')[:40])
+set_clipboard("sentinel")
+press_ctrl('c', 'KeyC', 67)
+time.sleep(0.7)
+COPIED = read_clipboard()
+check("Ctrl+C copies the text of the dialog, not the cells", COPIED == SELECTED,
+      (COPIED or '')[:60])
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(0.4)
+
+COLS_BEFORE = evaluate("__palacedb.grid.columns.length")
+evaluate("document.querySelector('.tool.icon[data-action=\"addColumn\"]').click()")
+check("the Add column dialog opens for the paste check",
+      wait_for("document.getElementById('modalTitle').textContent === 'Add column'", 10),
+      evaluate("document.getElementById('modalTitle').textContent"))
+set_clipboard("pasted name")
+evaluate("document.querySelector('#modal .form-input').focus()")
+press_ctrl('v', 'KeyV', 86)
+time.sleep(0.7)
+check("Ctrl+V pastes text into the dialog field",
+      evaluate("document.querySelector('#modal .form-input').value") == "pasted name",
+      evaluate("document.querySelector('#modal .form-input').value"))
+check("pasting into the dialog did not touch the table",
+      evaluate("__palacedb.grid.columns.length") == COLS_BEFORE)
+evaluate("document.getElementById('modalCancel').click()")
+time.sleep(0.4)
+
+# With nothing selected the shortcut is still the table's.
+evaluate("window.getSelection().removeAllRanges()")
+evaluate("__palacedb.grid.moveCursor(1, 1)")
+time.sleep(0.3)
+set_clipboard("sentinel")
+press_ctrl('c', 'KeyC', 67)
+time.sleep(0.7)
+CELLS = read_clipboard() or ""
+check("Ctrl+C on the table still copies the cells",
+      CELLS.startswith('{"kind":"palacedb/cells"'), CELLS[:60])
+
+# --- table templates: one definition, many tables (R14)
+# A template is a named column list in the side-car. Tables that follow it share every
+# column setting: an edit made in one of them is replayed on the others, a destructive
+# edit asks a second time, and a table that has grown a column of its own cannot join
+# until that column is removed or added to the template.
+def column_names(name):
+    """The column names of a table, read from the document the interface holds."""
+    return evaluate(
+        "JSON.stringify((__palacedb.state.document.sheets.find(s => s.name === %s) || {columns: []})"
+        ".columns.map(c => c.name))" % json.dumps(name))
+
+
+def column_names_expr(name):
+    """The same, as an expression, so it can be polled."""
+    return ("JSON.stringify(__palacedb.state.document.sheets.find(s => s.name === %s)"
+            ".columns.map(c => c.name))" % json.dumps(name))
+
+
+TPL_SHEET = evaluate("__palacedb.state.currentSheet")
+TPL_COLUMNS = json.loads(column_names(TPL_SHEET))
+
+evaluate("__palacedb.run('tableSettings')")
+check("Table Settings opens", wait_for("!document.getElementById('modal').hidden", 10))
+check("Table Settings names the table it edits",
+      evaluate("document.getElementById('modalTitle').textContent") == "Table settings: %s" % TPL_SHEET,
+      evaluate("document.getElementById('modalTitle').textContent"))
+check("Table Settings offers a template to follow",
+      evaluate("!!document.querySelector('#modal select.form-input')") is True)
+check("Table Settings offers to save these columns as a template",
+      evaluate("Array.from(document.querySelectorAll('#modal .form-actions button'))"
+               ".some(b => b.textContent.indexOf('Save these columns') === 0)") is True)
+
+evaluate("Array.from(document.querySelectorAll('#modal .form-actions button'))[0].click()")
+check("saving a template asks for a name",
+      wait_for("document.getElementById('modalTitle').textContent.indexOf('as a template') > 0", 5))
+evaluate("""(() => {
+  const input = document.querySelector('#modal .form-input');
+  input.value = 'E2E';
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  return true;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+check("the template is created", wait_for("__palacedb.state.document.templates.length === 1", 10))
+check("the table starts following the template it saved",
+      evaluate("(__palacedb.state.document.sheets.find(s => s.name === %s) || {}).template"
+               % json.dumps(TPL_SHEET)) is not None)
+
+with open(PAL_META, encoding="utf-8") as handle:
+    tpl_meta = json.load(handle)
+tpl_ids = list((tpl_meta.get("templates") or {}).keys())
+check("the template is stored in the side-car, not in the .cdb", len(tpl_ids) == 1, list(tpl_meta.keys()))
+check("the side-car is written in the version that knows templates",
+      tpl_meta.get("metaVersion") == 2, tpl_meta.get("metaVersion"))
+check("the table records which template it follows",
+      bool(tpl_ids) and (tpl_meta.get("tables") or {}).get(TPL_SHEET, {}).get("template") == tpl_ids[0],
+      (tpl_meta.get("tables") or {}).get(TPL_SHEET, {}).get("template"))
+check("the definition keeps every column of the table",
+      bool(tpl_ids)
+      and len((tpl_meta.get("templates") or {}).get(tpl_ids[0], {}).get("columns", [])) == len(TPL_COLUMNS),
+      len((tpl_meta.get("templates") or {}).get(tpl_ids[0], {}).get("columns", [])) if tpl_ids else None)
+
+check("the sidebar marks a table that follows a template",
+      evaluate("document.querySelectorAll('#tableList .tpl-dot').length") == 1,
+      evaluate("document.querySelectorAll('#tableList .tpl-dot').length"))
+check("the mark stays quiet and only explains itself on hover",
+      "E2E" in (evaluate("document.querySelector('#tableList .tpl-dot').title") or "")
+      and evaluate("document.querySelector('#tableList .tpl-dot').textContent").strip() == "",
+      evaluate("document.querySelector('#tableList .tpl-dot').title"))
+check("the status bar names the template in use",
+      evaluate("document.getElementById('statusTemplate').textContent") == "Template: E2E",
+      evaluate("document.getElementById('statusTemplate').textContent"))
+
+TPL_ID = evaluate("__palacedb.state.document.templates[0].id")
+evaluate("__palacedb.send('addSheet', {name: 'TplCopy', template: %s})" % json.dumps(TPL_ID))
+check("a table can be created from a template",
+      wait_for("__palacedb.state.document.sheets.some(s => s.name === 'TplCopy')", 15))
+check("it starts with the same columns in the same order",
+      column_names('TplCopy') == column_names(TPL_SHEET),
+      (column_names('TplCopy'), column_names(TPL_SHEET)))
+check("both tables are marked in the sidebar",
+      evaluate("document.querySelectorAll('#tableList .tpl-dot').length") == 2)
+
+# A rename reaches every table that follows the template, and the definition follows too.
+SECOND = TPL_COLUMNS[1]
+evaluate("__palacedb.send('renameColumn', {sheet: 'TplCopy', column: %s, name: 'tpl_renamed'})"
+         % json.dumps(SECOND))
+check("renaming a column in one table renames it in the others",
+      wait_for("%s.indexOf('tpl_renamed') >= 0" % column_names_expr(TPL_SHEET), 15),
+      column_names(TPL_SHEET))
+check("the two tables still agree", column_names('TplCopy') == column_names(TPL_SHEET))
+
+evaluate("__palacedb.send('addColumn', {sheet: 'TplCopy', index: 1, name: 'tpl_extra', type: '1'})")
+check("a column added in one table appears in the others",
+      wait_for("%s.indexOf('tpl_extra') >= 0" % column_names_expr(TPL_SHEET), 15),
+      column_names(TPL_SHEET))
+check("the template grew with it",
+      evaluate("__palacedb.state.document.templates[0].columns") == len(json.loads(column_names(TPL_SHEET))),
+      evaluate("__palacedb.state.document.templates[0].columns"))
+
+# Deleting a shared column is the destructive case: the values in the other tables go with it.
+# The sidebar is clicked rather than the host told, because selecting a table is what makes
+# the grid load its rows — and the scan below reads values off the grid.
+evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('#tableList .table-item'))
+    .find(el => el.dataset.sheet === %s);
+  if (item) item.click();
+  return !!item;
+})()""" % json.dumps(TPL_SHEET))
+check("clicking a table in the sidebar shows it again",
+      wait_for("__palacedb.state.currentSheet === %s && __palacedb.grid.rowCount > 0"
+               % json.dumps(TPL_SHEET), 15),
+      (evaluate("__palacedb.state.currentSheet"), evaluate("__palacedb.grid.rowCount")))
+VICTIM = evaluate("""(() => {
+  // A column the two tables share and that actually holds values: an empty one is not
+  // worth confirming, and its cells read as the missing-value marker.
+  const columns = __palacedb.grid.columns;
+  const rows = Math.min(__palacedb.grid.rowCount, 20);
+  for (let c = 1; c < columns.length; c++) {
+    for (let r = 0; r < rows; r++) {
+      const cell = __palacedb.grid.cellValue(r, c);
+      if (cell && cell.t && cell.s !== 'missing') return columns[c].name;
+    }
+  }
+  return null;
+})()""")
+check("the sample table has a column with values to lose", VICTIM is not None, VICTIM)
+
+if VICTIM:
+    evaluate("__palacedb.send('deleteColumn', {sheet: 'TplCopy', column: %s})" % json.dumps(VICTIM))
+    check("deleting a shared column asks a second time",
+          wait_for("!document.getElementById('modal').hidden && "
+                   "document.getElementById('modalTitle').textContent.indexOf('from every table') > 0", 15),
+          evaluate("document.getElementById('modalTitle').textContent"))
+    check("the question lists every table that would lose the column",
+          evaluate("document.querySelectorAll('#modal .impact-row').length") == 2,
+          evaluate("document.querySelectorAll('#modal .impact-row').length"))
+    check("the question counts the values that would be lost",
+          "value" in (evaluate("document.getElementById('modalBody').textContent") or ""),
+          evaluate("document.getElementById('modalBody').textContent"))
+    evaluate("document.getElementById('modalCancel').click()")
+    time.sleep(0.5)
+    check("cancelling keeps the column everywhere",
+          VICTIM in json.loads(column_names('TplCopy')) and VICTIM in json.loads(column_names(TPL_SHEET)))
+
+    evaluate("__palacedb.send('deleteColumn', {sheet: 'TplCopy', column: %s, confirmed: true})"
+             % json.dumps(VICTIM))
+    ok = wait_for("%s.indexOf(%s) < 0" % (column_names_expr('TplCopy'), json.dumps(VICTIM)), 15)
+    check("confirming deletes the column from every table",
+          ok and VICTIM not in json.loads(column_names(TPL_SHEET)),
+          (column_names('TplCopy'), column_names(TPL_SHEET)))
+
+# A detached table can drift; joining again is refused while it has a column of its own.
+evaluate("__palacedb.send('detachTemplate', {sheet: 'TplCopy'})")
+check("a table can stop following its template",
+      wait_for("!(__palacedb.state.document.sheets.find(s => s.name === 'TplCopy') || {})"
+               ".template", 15),
+      evaluate("(__palacedb.state.document.sheets.find(s => s.name === 'TplCopy') || {}).template"))
+check("the sidebar mark goes with the link",
+      evaluate("document.querySelectorAll('#tableList .tpl-dot').length") == 1)
+
+evaluate("__palacedb.send('addColumn', {sheet: 'TplCopy', index: 2, name: 'tpl_only_here', type: '1'})")
+time.sleep(1.0)
+check("a detached table can change on its own",
+      'tpl_only_here' in json.loads(column_names('TplCopy'))
+      and 'tpl_only_here' not in json.loads(column_names(TPL_SHEET)))
+
+TPL_BEFORE = column_names(TPL_SHEET)
+evaluate("__palacedb.send('applyTemplate', {sheet: 'TplCopy', template: %s})" % json.dumps(TPL_ID))
+check("a table with a column of its own is refused",
+      wait_for("!document.getElementById('modal').hidden && "
+               "document.getElementById('modalTitle').textContent.indexOf('cannot follow') > 0", 15),
+      evaluate("document.getElementById('modalTitle').textContent"))
+check("the report names the column that is in the way",
+      'tpl_only_here' in (evaluate("document.getElementById('modalBody').textContent") or ""),
+      evaluate("document.getElementById('modalBody').textContent"))
+check("the refusal changed nothing", column_names(TPL_SHEET) == TPL_BEFORE)
+check("the report offers to add the column to the template",
+      evaluate("Array.from(document.querySelectorAll('#modal button'))"
+               ".some(b => b.textContent.indexOf('Add these columns') === 0)") is True)
+
+# The dialog only reports; its Close button has to close it rather than do nothing.
+check("the report button is labelled Close",
+      evaluate("document.getElementById('modalOk').textContent") == "Close",
+      evaluate("document.getElementById('modalOk').textContent"))
+evaluate("document.getElementById('modalOk').click()")
+check("the Close button of the report closes it",
+      wait_for("document.getElementById('modal').hidden", 5),
+      evaluate("document.getElementById('modalTitle').textContent"))
+check("closing the report changed nothing either", column_names(TPL_SHEET) == TPL_BEFORE)
+
+evaluate("__palacedb.send('applyTemplate', {sheet: 'TplCopy', template: %s})" % json.dumps(TPL_ID))
+check("the report can be opened again",
+      wait_for("!document.getElementById('modal').hidden && "
+               "document.getElementById('modalTitle').textContent.indexOf('cannot follow') > 0", 15),
+      evaluate("document.getElementById('modalTitle').textContent"))
+
+evaluate("Array.from(document.querySelectorAll('#modal button'))"
+         ".find(b => b.textContent.indexOf('Add these columns') === 0).click()")
+check("adding the columns to the template brings the other tables up to it",
+      wait_for("%s.indexOf('tpl_only_here') >= 0" % column_names_expr(TPL_SHEET), 15),
+      column_names(TPL_SHEET))
+check("both tables match the template afterwards",
+      column_names('TplCopy') == column_names(TPL_SHEET),
+      (column_names('TplCopy'), column_names(TPL_SHEET)))
+
+# --- an enum keeps its empty first value, so the table still matches the template
+# CastleDB writes an enum as "5:,Common,Rare": the first label is empty, and dropping it
+# moves every stored index onto another label. Re-encoding the text on the way out of the
+# column dialog used to do exactly that, after which the table no longer matched the
+# template it had just been saved into — and the report read "'rarity' is enum in this
+# table but enum in the template", which explains nothing.
+evaluate("__palacedb.send('addColumn', {sheet: %s, index: 2, name: 'tpl_enum', type: '5:,Common,Rare'})"
+         % json.dumps(TPL_SHEET))
+check("an enum column can be added to a table that follows a template",
+      wait_for("%s.indexOf('tpl_enum') >= 0" % column_names_expr(TPL_SHEET), 15),
+      column_names(TPL_SHEET))
+check("the enum reaches the other table too",
+      wait_for("%s.indexOf('tpl_enum') >= 0" % column_names_expr('TplCopy'), 15),
+      column_names('TplCopy'))
+
+TPL_ENUM_TYPE = """(() => {
+  const sheet = __palacedb.state.document.sheets.find(s => s.name === %s);
+  const column = sheet && sheet.columns.find(c => c.name === 'tpl_enum');
+  return column ? column.typeStr : null;
+})()""" % json.dumps(TPL_SHEET)
+
+
+def template_column_type(name):
+    """The type a template stores for a column, read straight from the side-car."""
+    with open(PAL_META, encoding="utf-8") as handle:
+        meta = json.load(handle)
+    for template in (meta.get("templates") or {}).values():
+        for column in template.get("columns") or []:
+            if column.get("name") == name:
+                return column.get("typeStr")
+    return None
+
+
+for _ in range(20):
+    if template_column_type('tpl_enum') is not None:
+        break
+    time.sleep(0.25)
+check("the template records the enum with its empty first value",
+      template_column_type('tpl_enum') == "5:,Common,Rare", template_column_type('tpl_enum'))
+
+open_header_menu(column_index('tpl_enum'))
+click_menu_item('Edit Column')
+time.sleep(0.6)
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(1.0)
+check("closing the column dialog leaves the enum as it was",
+      evaluate(TPL_ENUM_TYPE) == "5:,Common,Rare", evaluate(TPL_ENUM_TYPE))
+
+evaluate("__palacedb.send('detachTemplate', {sheet: 'TplCopy'})")
+time.sleep(0.8)
+evaluate("__palacedb.send('applyTemplate', {sheet: 'TplCopy', template: %s})" % json.dumps(TPL_ID))
+check("a table whose enum matches the template joins it again",
+      wait_for("(__palacedb.state.document.sheets.find(s => s.name === 'TplCopy') || {}).template === %s"
+               % json.dumps(TPL_ID), 15),
+      evaluate("(__palacedb.state.document.sheets.find(s => s.name === 'TplCopy') || {}).template"))
+check("no conflict is reported when the two types are the same",
+      evaluate("document.getElementById('modal').hidden") is True,
+      evaluate("document.getElementById('modalBody').textContent"))
+
+# The manager lists, renames and removes templates; removing one keeps the columns.
+evaluate("__palacedb.run('templates')")
+check("the Templates window lists the template",
+      wait_for("document.querySelectorAll('#modal .template-row').length === 1", 10))
+check("it says how many tables follow it",
+      "2 tables" in (evaluate("document.querySelector('#modal .template-meta').textContent") or ""),
+      evaluate("document.querySelector('#modal .template-meta').textContent"))
+evaluate("""(() => {
+  const input = document.querySelector('#modal .template-row input');
+  input.value = 'E2E renamed';
+  input.dispatchEvent(new Event('change', {bubbles: true}));
+  return true;
+})()""")
+check("a template can be renamed",
+      wait_for("__palacedb.state.document.templates[0].name === 'E2E renamed'", 10),
+      evaluate("__palacedb.state.document.templates[0].name"))
+
+TPL_KEPT = column_names(TPL_SHEET)
+evaluate("document.querySelector('#modal .template-row button').click()")
+check("removing a template asks once more",
+      evaluate("document.querySelector('#modal .template-row button').textContent") == "Delete?")
+evaluate("document.querySelector('#modal .template-row button').click()")
+check("the template is gone", wait_for("__palacedb.state.document.templates.length === 0", 10))
+check("its tables keep their columns", column_names(TPL_SHEET) == TPL_KEPT)
+check("and stop following it",
+      evaluate("__palacedb.state.document.sheets.every(s => !s.template)") is True)
+check("the sidebar marks are gone",
+      evaluate("document.querySelectorAll('#tableList .tpl-dot').length") == 0)
+evaluate("document.getElementById('modalOk').click()")
+check("the Close button of the template list closes it",
+      wait_for("document.getElementById('modal').hidden", 5),
+      evaluate("document.getElementById('modalTitle').textContent"))
+time.sleep(0.4)
+with open(PAL_META, encoding="utf-8") as handle:
+    tpl_meta = json.load(handle)
+check("the side-car no longer lists the template", not (tpl_meta.get("templates") or {}),
+      list((tpl_meta.get("templates") or {}).keys()))
+
+# --- the appearance is remembered across a restart
+# It is written to localStorage, so the next window opens with the same sizes and palette
+# without the database carrying any of it.
+evaluate("__palacedb.applySettings({uiFontSize: 16, gridFontSize: 17, scheme: 'ocean'})")
+time.sleep(2.0)
+stored = evaluate("localStorage.getItem('palacedb.settings')") or "{}"
+try:
+    stored_json = json.loads(stored)
+except ValueError:
+    stored_json = {}
+check("the appearance is stored before the restart",
+      stored_json.get("uiFontSize") == 16 and stored_json.get("gridFontSize") == 17
+      and stored_json.get("scheme") == "ocean", stored)
+
+# --- crash recovery on the next start (F19)
+ws.close()
+proc.terminate()
+time.sleep(1.0)
+
+RECOVER_DIR = os.path.join(WORK, "recover")
+os.makedirs(RECOVER_DIR, exist_ok=True)
+RECOVER = os.path.join(RECOVER_DIR, "Crash.cdb")
+shutil.copy(SOURCE, RECOVER)
+
+crash = json.load(open(SOURCE, encoding="utf-8"))
+crash["sheets"][0]["lines"][0][ID_NAME] = "RECOVERED_ROW"
+crash_backup = RECOVER + ".autobackup"
+with open(crash_backup, "w", encoding="utf-8", newline="\n") as handle:
+    json.dump(crash, handle, ensure_ascii=False, indent="\t")
+os.utime(crash_backup, (time.time() + 60, time.time() + 60))
+
+# A side-car that remembers a window clearly smaller than the default one, so the
+# restored client area proves the geometry was applied rather than defaulted (F17).
+with open(RECOVER + ".meta.json", "w", encoding="utf-8", newline="\n") as handle:
+    json.dump({
+        "metaVersion": 1,
+        "fileId": "geometry000000000000000000000000",
+        "createdWith": "PalaceDB.CSharp/1.0",
+        "tables": {},
+        "windowState": {"width": 760, "height": 520, "x": 100, "y": 80, "maximized": False},
+    }, handle, indent=2)
+
+proc = subprocess.Popen(
+    [EXE, RECOVER],
+    env=dict(os.environ, PALACEDB_CDP="9334", PALACEDB_AUTOMATION="1", PALACEDB_BACKUP_SECONDS="120"))
+ws = None
+for _ in range(60):
+    time.sleep(0.5)
+    park_windows(proc.pid)
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9334/json/list", timeout=2) as r:
+            targets = json.load(r)
+        pages = [t for t in targets if t.get("type") == "page"]
+        if pages:
+            ws = websocket.create_connection(pages[0]["webSocketDebuggerUrl"], timeout=15)
+            break
+    except Exception:
+        continue
+
+if ws is None:
+    check("recovery instance started", False, "no CDP target")
+else:
+    check("recovery instance started", True)
+    ok = wait_for("!!(window.__palacedb && __palacedb.state.document)", 25)
+    check("recovered document loaded", ok, evaluate("document.title"))
+    ok = wait_for("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t === 'RECOVERED_ROW'", 20)
+    check("backup content restored into the grid", ok,
+          evaluate("__palacedb.grid.cellValue(0,0) && __palacedb.grid.cellValue(0,0).t"))
+    check("backup file consumed", wait_for_file(crash_backup, 8, False), crash_backup)
+    check("recovered content written to the database",
+          json.load(open(RECOVER, encoding="utf-8"))["sheets"][0]["lines"][0][ID_NAME] == "RECOVERED_ROW")
+
+    # --- the sizes and the palette survived the restart
+    check("the palette came back with the window",
+          evaluate("document.body.dataset.scheme") == "ocean"
+          and evaluate("document.body.classList.contains('theme-dark')") is True,
+          evaluate("document.body.dataset.scheme"))
+    check("the sizes came back with the window",
+          evaluate("getComputedStyle(document.documentElement).getPropertyValue('--grid-font-size').trim()") == "17px"
+          and evaluate("getComputedStyle(document.documentElement).getPropertyValue('--font-size').trim()") == "16px",
+          evaluate("getComputedStyle(document.documentElement).getPropertyValue('--grid-font-size').trim()"))
+    check("the restored size placed the rows correctly",
+          evaluate("""(() => {
+            const cell = document.querySelector('#gridRows .cell[data-row="2"]');
+            const gutter = document.querySelector('#gridGutter .gutter-cell[data-row="2"]');
+            if (!cell || !gutter) return false;
+            return Math.abs(cell.getBoundingClientRect().top - gutter.getBoundingClientRect().top) < 2;
+          })()""") is True)
+    # Leave the shared profile at the defaults so the next run starts the same way.
+    evaluate("__palacedb.applySettings({uiFontSize: 15, gridFontSize: 14, scheme: 'light'})")
+    time.sleep(0.6)
+
+    # --- remembered window geometry (F17)
+    viewport = evaluate("({w: window.innerWidth, h: window.innerHeight})") or {"w": 0, "h": 0}
+    check("remembered window size restored",
+          700 <= viewport["w"] <= 765 and 430 <= viewport["h"] <= 530,
+          viewport)
+
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
+    time.sleep(1.2)
+    restored = json.load(open(RECOVER + ".meta.json", encoding="utf-8")).get("windowState") or {}
+    check("geometry kept in the side-car after saving",
+          isinstance(restored.get("x"), (int, float)) and isinstance(restored.get("width"), (int, float)),
+          restored)
+    check("saved geometry matches the window on screen",
+          abs(restored.get("width", 0) - viewport["w"]) < 60,
+          (restored.get("width"), viewport))
+
+# --- no console errors
+ws.close()
+proc.terminate()
+time.sleep(0.5)
+
+print("\nSUMMARY:", sum(1 for _,ok,_ in results if ok), "/", len(results), "passed")
