@@ -168,8 +168,9 @@ python tests/ui/test_ui.py                                        # 端到端，
 ```
 
 端到端测试会自己起一个真实的窗口，通过 WebView2 的调试协议操作 DOM；跑的时候别去动那个窗口。
-它默认打开 `tests/fixtures/TestData2.cdb`，也可以自己指定文件：
-`python tests/ui/test_ui.py path\to\other.cdb`。
+前半段用仓库里的 `TestData2.cdb`，后半段（把每种列类型都过一遍）需要一个 `tests/fixtures/food.cdb`
+和它的 `food_img/`、`file/` 目录 —— 那是开发机上的真实数据，不进仓库。缺了它前半段照跑，
+后半段会打印 `SKIP` 并以退出码 3 结束。
 
 ## 测试数据
 

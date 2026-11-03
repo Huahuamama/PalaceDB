@@ -331,8 +331,14 @@ check("redo reapplied the edit", val == "EDITED_BY_TEST", val)
 ml_row = 1
 ml_col = evaluate("__palacedb.grid.columns.findIndex(c=>c.type==='Text')")
 if ml_col >= 0:
+    # The block above committed with Enter. Its editor node stays in the DOM for a frame
+    # or two, and `document.querySelector` happily returns that dying node — the keystrokes
+    # then land on the previous cell while this block checks a different one. Wait for it
+    # to go before asking for a new editor, then wait for the new one to appear.
+    wait_for("!document.querySelector('.editor-input')", 5)
     evaluate(f"__palacedb.grid.moveCursor({ml_row},{ml_col})")
     evaluate(f"__palacedb.grid.onEditRequest({ml_row},{ml_col},'')")
+    wait_for("!!document.querySelector('.editor-input')", 5)
     tag = evaluate("(()=>{const e=document.querySelector('.editor-input');return e?e.tagName:null})()")
     check("text editor is a textarea", tag == "TEXTAREA", tag)
 
@@ -354,7 +360,10 @@ if ml_col >= 0:
       return true;
     })()""")
     time.sleep(0.8)
-    wait_for(f"__palacedb.grid.cellValue({ml_row},{ml_col}) !== undefined")
+    # Wait for the commit to reach the grid instead of sampling it once: the host has to
+    # accept the value and the grid repaint before the cell reads back the new text.
+    wait_for(f"__palacedb.grid.cellValue({ml_row},{ml_col}) && "
+             f"__palacedb.grid.cellValue({ml_row},{ml_col}).t === 'LINE_ONE\\nLINE_TWO'", 10)
     ml_val = evaluate(f"__palacedb.grid.cellValue({ml_row},{ml_col}).t")
     check("multi-line value committed", ml_val == "LINE_ONE\nLINE_TWO", repr(ml_val))
 
@@ -2028,10 +2037,24 @@ if id_name:
     time.sleep(0.6)
 
 # --- every column type, on a real file with images and files next to it
+# That sample is not in the repository (it is somebody's real data), so a fresh clone
+# stops here with an explanation instead of a traceback. Everything before this point
+# runs on the committed TestData2.cdb.
+FOOD_SOURCE = os.path.join(FIXTURES, "food.cdb")
+if not os.path.exists(FOOD_SOURCE):
+    passed = sum(1 for _, ok, _ in results if ok)
+    print("\nSKIP: %s is not in this checkout." % FOOD_SOURCE)
+    print("      The second half of the suite needs that file plus its food_img/ and")
+    print("      file/ folders. Drop any CastleDB file there under that name to run it.")
+    print("      Checks before it: %d / %d passed" % (passed, len(results)))
+    ws.close()
+    proc.terminate()
+    sys.exit(3)
+
 FOOD_DIR = os.path.join(WORK, "food")
 os.makedirs(FOOD_DIR, exist_ok=True)
 FOOD = os.path.join(FOOD_DIR, "food.cdb")
-shutil.copy(os.path.join(FIXTURES, "food.cdb"), FOOD)
+shutil.copy(FOOD_SOURCE, FOOD)
 for folder in ("food_img", "file"):
     shutil.copytree(os.path.join(FIXTURES, folder), os.path.join(FOOD_DIR, folder))
 
@@ -2228,8 +2251,11 @@ evaluate("""(() => {
   return 1;
 })()""")
 time.sleep(0.7)
+# Same as the multi-line block: the checkbox change goes host -> document -> grid, so the
+# cell only reads back the new mask once that round trip lands. Waiting for the value is
+# what keeps this from flaking on a busy machine.
 check("flags keep the names that are set",
-      "dairy" in (evaluate("__palacedb.grid.cellValue(1,%d).t" % flags_col) or ""),
+      wait_for("(__palacedb.grid.cellValue(1,%d).t || '').includes('dairy')" % flags_col, 10) is True,
       evaluate("__palacedb.grid.cellValue(1,%d).t" % flags_col))
 
 # Enum: picking a label stores that label, and typing a number means the label too.
