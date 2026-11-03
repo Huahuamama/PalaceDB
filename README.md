@@ -8,19 +8,17 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 
 <img width="1316" height="790" alt="image" src="https://github.com/user-attachments/assets/fa2a2323-6d9a-45bc-aec6-6a85ab34250f" />
 
-> **说明：本项目的代码由 AI 生成**，人负责需求、验收与发版。详见文末「[关于代码](#关于代码)」。
+> **说明：本项目的代码由 AI 生成**，人负责需求、验收与发版。
 
 ---
 
 ## 它做什么
 
+- 可视化的json数据编辑器。
 - 打开一个 `.cdb`，左侧列出所有表，右侧是表格，单元格按类型给不同的编辑控件。
-- 增删改行、列、表；拖动行号排序；行内可以插分隔线和命名分组。
-- 列可以引用另一张表（下拉选择），可以是 List / Properties（单击单元格在行下方展开二级表格）。
-- 撤销 / 重做；多窗口打开同一个文件时第二个窗口只读。
+- 可多开窗口，同一文件打开两次会变成只读。
 - 5 分钟自动备份，崩溃或断电后可以恢复。
-- 列宽、行底色、窗口位置、模板定义这些**展示状态**存在旁边的 `X.cdb.meta.json`，不写进数据文件。
-  （分隔线本身和它的标题是**数据**，写在 `.cdb` 的 `props.separatorTitles` 里——游戏可能要用它分组。）
+- 可以为表建立模板，应用同一模板的表的数据结构将自动保持一致。
 
 ## 它不做什么
 
@@ -34,7 +32,6 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 
 1. [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)（x64）
 2. [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
-   —— Windows 11 自带，Windows 10 一般也已经有
 
 然后：
 
@@ -113,28 +110,7 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 | Guid | 13 位标识符，新行自动生成，编码与 CastleDB 的 `Guid.ofInt` 兼容 |
 | Formula / Dynamic | 原样读写，没有专用编辑器 |
 
-## 快捷键
-
-| 快捷键 | 作用 |
-| --- | --- |
-| `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | 打开 / 保存 / 另存为 |
-| `Ctrl+N` / `Ctrl+Shift+N` | 新建数据库 / 新窗口 |
-| `Ctrl+W` | 关闭文档 |
-| `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
-| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | 复制 / 剪切 / 粘贴单元格（粘贴默认覆盖，`Ctrl+Shift+V` 是插入） |
-| `Ctrl+A` | 全选当前表 |
-| `Ctrl+Enter` | 把当前编辑的值填满选区 |
-| `Tab` / `Ctrl+B` | 收起 / 展开表列表 |
-| `Ctrl+T` | 深色 / 浅色 |
-| `Ctrl+,` | 设置 |
-| 方向键 / `Tab` / `Enter` | 移动光标、进入编辑 |
-
-对话框里的文字（比如错误信息、冲突报告）**可以选中复制**：选中后 `Ctrl+C` 复制的是那段文字，
-不会再把表格里的单元格塞进剪贴板。
-
 ## 设置
-
-`Ctrl+,` 或 View ▸ Settings：
 
 - **界面字号** 12–20 px，**表格字号** 10–20 px，互不影响，行高跟着字号走。
 - **九套配色**：Daylight、Midnight、Graphite、Deep Sea、Sandstone、Blush、Lilac、Olive、Mint。
@@ -147,16 +123,6 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 - Custom / Polymorph / Gradient / Curve 类型没有专用编辑器，按原始文本读写，不会丢数据。
 - 图片缩略图在会话里第一次显示时会同步读盘，单张大图（≤4 MB）会有几十毫秒停顿。
 - 窗口位置只在保存 / 关闭时写回；进程被强杀会丢最后一次移动。
-
-## 更多文档
-
-| 文档 | 内容 |
-| --- | --- |
-| `docs/03-用户手册-v1.md` | 完整用户手册（每个菜单、每种列类型、每个对话框） |
-| `docs/04-功能对照表-v1.md` | 需求 → 功能对照 |
-| `docs/05-数据与元数据格式规范-v1.md` | `.cdb` / `.meta.json` 的字段规范 |
-| `docs/06-测试与验收报告-v1.md` | 测试与验收记录 |
-| `docs/07-开发者指南-v1.md` | **给程序员的**：架构、代码导航、怎么改、怎么发版 |
 
 ## 参与开发
 
@@ -179,24 +145,3 @@ python tests/ui/test_ui.py                                        # 端到端，
 `tests/fixtures/` 里的 `TestData1.cdb`、`TestData2.cdb` 跟着仓库走，clone 下来就能跑测试。
 其余样本（`food.cdb` 和它的图片、文件目录）是开发机上用的真实数据，被 `.gitignore` 排除，
 想跑发布冒烟（`tools/release_smoke.py`）就自己放一个同名文件进去。
-
-`samples/demo.cdb` 是给用户看的示例库：两张表（`items` / `levels`）、九种列类型、
-三个小图标，随时可以拿来练手。
-
-## 关于代码
-
-**这个项目的代码是 AI 生成的**：C# 后端、WebView2 前端、单元测试、端到端测试和文档，
-都由 AI 编程助手写成，人负责提需求、验收和发版。
-
-这意味着两件事，用之前请先知道：
-
-- **以测试为准，不以"看起来对"为准。** 665 个单元测试 + 475 项端到端检查是功能边界；
-  测试没覆盖到的地方，行为不保证。
-- **风格不保证统一。** 有些地方会绕、会重复、会有历史包袱（比如同一段列类型判断在前后端各写了一遍）。
-  改之前先看 `docs/07-开发者指南-v1.md`，它记录的是"为什么这样做"，比读代码快。
-
-发现 bug 或者写得不好的地方，欢迎直接提 issue / PR —— 人来 review，AI 来改。
-
-## 许可
-
-[CC0 1.0](LICENSE) —— 公共领域奉献，随便用、随便改、不用署名。
