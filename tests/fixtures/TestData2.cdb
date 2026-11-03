@@ -1,0 +1,2576 @@
+{
+	"sheets": [
+		{
+			"name": "EventCard",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "Id"
+				},
+				{
+					"typeStr": "1",
+					"name": "Title",
+					"display": null
+				},
+				{
+					"typeStr": "1",
+					"name": "Des",
+					"display": null
+				},
+				{
+					"typeStr": "1",
+					"name": "RstText"
+				},
+				{
+					"typeStr": "1",
+					"name": "RstValue",
+					"opt": true
+				},
+				{
+					"typeStr": "1",
+					"name": "Condition",
+					"opt": true
+				},
+				{
+					"typeStr": "3",
+					"name": "Priority"
+				},
+				{
+					"typeStr": "2",
+					"name": "LockedInDemo"
+				},
+				{
+					"typeStr": "10:TimeLimit,Branch,Result,HideResult,Regular,Options",
+					"name": "EventType"
+				},
+				{
+					"typeStr": "1",
+					"name": "Icon"
+				},
+				{
+					"typeStr": "5:,Uncommon,Rare",
+					"name": "Rarity",
+					"display": null
+				},
+				{
+					"name": "Bool",
+					"typeStr": "2",
+					"defaultValue": false
+				}
+			],
+			"lines": [
+				{
+					"Id": "vocational",
+					"Title": "职业培训",
+					"Des": "在培训中心接受为期一年的职业培训课程，使你在就业时更具优势。",
+					"RstText": "恭喜入学！",
+					"Priority": 0,
+					"RstValue": "money-600,max+4, school=3",
+					"Condition": "money>=600, maxAttribute>=60",
+					"LockedInDemo": false,
+					"Icon": "vocational",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "college",
+					"Title": "社区大学",
+					"Des": "还没想好以后要干什么？来社区大学吧，你可以在这额外的两年里好好考虑。",
+					"RstText": "恭喜入学！",
+					"Priority": 0,
+					"RstValue": "money-2000,max+8, school=4",
+					"Condition": "money>=2000, masteryCount>=1, int>=60",
+					"LockedInDemo": false,
+					"Icon": "college",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "university",
+					"Title": "市立大学",
+					"Des": "一流的大学，只招收最优秀的学生。",
+					"RstText": "恭喜入学！",
+					"Priority": 0,
+					"RstValue": "money-20000,max+16,school=5",
+					"Condition": "money>=20000, masteryCount>=2, int>=60",
+					"LockedInDemo": false,
+					"Icon": "university",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": true
+				},
+				{
+					"Id": "no_entry",
+					"Title": "不升学",
+					"Des": "直接就业。",
+					"RstText": "最讨厌上学了。",
+					"Priority": 0,
+					"RstValue": "school = 0",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "agi1",
+					"Title": "动物木雕",
+					"Des": "学习手工雕刻1：1大小的狮子、大象、河马……等等，所有你喜欢的动物。",
+					"RstText": "动物园经常来你们学校收购优秀作品。",
+					"Priority": 0,
+					"RstValue": "agi+40",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "str1",
+					"Title": "挖掘机技术培训",
+					"Des": "挖掘机是只有最顶尖的技术人员才能掌握的高端机器。",
+					"RstText": "你喜欢开着挖掘机在高速公路上漂移过弯。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"RstValue": "str+40",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "end1",
+					"Title": "美妆技巧",
+					"Des": "美妆的意义是掩盖内心的伤痕。",
+					"RstText": "你能把人化妆成僵尸，反之亦然。",
+					"Priority": 0,
+					"RstValue": "end+40",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pop1",
+					"Title": "儿童训练师",
+					"Des": "一种结合了儿童心理学与动物行为学的实验性的教育方法。",
+					"RstText": "受你训练的儿童都很听话。你让他们看电视，他们就乖乖看电视。你让他们吃雪糕，他们就乖乖吃雪糕。",
+					"Priority": 0,
+					"RstValue": "pop+40",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "int1",
+					"Title": "软件开发",
+					"Des": "既能让人感受到上帝创造世界的乐趣，也能让人理解上帝释放大洪水的冲动。",
+					"RstText": "你开发了一款把人类培养成僵尸的游戏，但是根本卖不出去。",
+					"Priority": 0,
+					"RstValue": "int+40",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "str2",
+					"Title": "炸药制备",
+					"Des": "在法律允许的范围内，体验爆破的快乐。",
+					"RstText": "你每天顶着爆炸头来上课。",
+					"Priority": 0,
+					"RstValue": "str+35",
+					"LockedInDemo": false,
+					"Condition": "age==18",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "str2_2",
+					"Title": "分子料理",
+					"Des": "一门起源于炼金术的古老烹饪法。",
+					"RstText": "现在你能够把土豆做出洋芋的味道。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"RstValue": "str+35",
+					"Condition": "age==19",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "agi2",
+					"Title": "针灸",
+					"Des": "扎对了能减轻痛苦，扎错了能制造双倍的痛苦，没有比这更刺激的豪赌了！",
+					"RstText": "你经常用自己的手臂练习扎针，现在它开始漏水了。",
+					"Priority": 0,
+					"RstValue": "agi+35",
+					"LockedInDemo": false,
+					"Condition": "age==18",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "agi2_2",
+					"Title": "人体按摩",
+					"Des": "正确的按摩手法可以让人恢复健康。",
+					"RstText": "已经有几十人伤在你的分筋错骨手之下。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"RstValue": "agi+35",
+					"Condition": "age==19",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "end2",
+					"Title": "超能力研究",
+					"Des": "用科学的方式研究无法用科学证实的东西。",
+					"RstText": "老师教了整整一个学期，然后告诉你结论是超能力这东西可能有也可能没有。",
+					"Priority": 0,
+					"RstValue": "end+35",
+					"LockedInDemo": false,
+					"Condition": "age==18",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "end2_2",
+					"Title": "冥想入门",
+					"Des": "一项锻炼专注力的修行艺术。",
+					"RstText": "你一闭上眼就打瞌睡。要不是呼噜声太响，教授差点以为你是冥想的奇才。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"RstValue": "end+35",
+					"Condition": "age==19",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pop2",
+					"Title": "诡辩术",
+					"Des": "吹牛不打草稿的艺术。",
+					"RstText": "你的脸皮有所增厚。",
+					"Priority": 0,
+					"RstValue": "pop+35",
+					"LockedInDemo": false,
+					"Condition": "age==18",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pop2_2",
+					"Title": "情绪管理",
+					"Des": "这门课很重要，你日后上班最重要的就是不能当面骂老板。",
+					"RstText": "你意识到，不当面骂老板最好的办法，就是在私下里骂。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Condition": "age==19",
+					"RstValue": "pop+35",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "int2",
+					"Title": "宇宙语言学",
+					"Des": "也许能提升你在外星人入侵地球时的存活率。",
+					"RstText": "你隐隐觉得萨克斯风可能是与外星人沟通的关键……谁知道呢？",
+					"Priority": 0,
+					"RstValue": "int+35",
+					"LockedInDemo": false,
+					"Condition": "age==18",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "int2_2",
+					"Title": "概率论",
+					"Des": "这门课的教授是个赌鬼，每个月靠工资还高利贷。",
+					"RstText": "你无法用概率论解释为什么每次翘课老师就会点你的名。但你在期末靠出老千赢了老师，所以你及格了。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"RstValue": "int+35",
+					"Condition": "age==19",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "str3",
+					"Title": "天体力学",
+					"Des": "质量越大，引力越大。",
+					"RstText": "你的老师体型非常庞大，所以每次上课你总是情不自禁地绕着他转圈。",
+					"Priority": 0,
+					"RstValue": "str+30",
+					"LockedInDemo": false,
+					"Condition": "age==18",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "str3_1",
+					"Title": "剑术",
+					"Des": "传说教这门课的老师是一位隐姓埋名的剑术高手。",
+					"RstText": "你们上课上到一半，教授的仇家找上门来要跟他决斗。教授以迅雷不及掩耳之势破窗逃跑了，从此再也没人知道他的消息。学校给所有选修这门课的人都打了及格。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"RstValue": "str+30",
+					"Condition": "age==19",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "agi3",
+					"Title": "博弈论",
+					"Des": "人生如棋，不但要走得妙，还得让对手觉得自己在赢。",
+					"RstText": "你现在上街买菜总能多砍下几块钱。",
+					"Priority": 0,
+					"RstValue": "agi+30",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "end3",
+					"Title": "国际关系",
+					"Des": "可是这跟你又有什么关系呢？",
+					"RstText": "你跟你的叔叔一样，喜欢在餐桌上指点江山。",
+					"Priority": 0,
+					"RstValue": "end+30",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pop3",
+					"Title": "大众传媒",
+					"Des": "期末成绩取决于你在社交平台的粉丝数量。",
+					"RstText": "你通过发引战贴的方式成功涨了一万粉，通过了考试。",
+					"Priority": 0,
+					"RstValue": "pop+30",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "int3",
+					"Title": "基因工程",
+					"Des": "这门课的教授因为非法克隆人类，目前还在服刑。",
+					"RstText": "你们每周都要去监狱里听课。",
+					"Priority": 0,
+					"RstValue": "int+30",
+					"LockedInDemo": false,
+					"Condition": "age==18",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "int3_1",
+					"Title": "量子力学",
+					"Des": "随便听听吧，反正没人知道教授讲的什么。",
+					"RstText": "经人举报，你们的教授原来只是一名三流编剧。每次他圆不回剧情的时候就说这是量子力学。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"RstValue": "int+30",
+					"Condition": "age==19",
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Neetie",
+					"Title": "家里蹲",
+					"Des": "人之所以不幸，是因为不懂得好好宅在家里。",
+					"RstText": "",
+					"Priority": 0,
+					"Condition": "homeStreak>=32",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Indie",
+					"Title": "独立游戏开发者",
+					"Des": "是真的热爱游戏，绝对不是因为找不到工作。",
+					"RstText": "",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "",
+					"Condition": "unlocked_Minionnie==1, masteryCount==0",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Veggie",
+					"Title": "素食推广大使",
+					"Des": "反正不许吃肉。",
+					"RstText": "",
+					"Priority": 0,
+					"Condition": "hasMeat==0, hasVegan>=10",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Richie",
+					"Title": "暴发户",
+					"Des": "你喜欢花钱，你更喜欢别人看着你花钱。",
+					"RstText": "",
+					"Priority": 0,
+					"Condition": "money>=1000000",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "The_Chosen",
+					"Title": "天命所归",
+					"Des": "你才是河马市的第一个僵尸。这一切因你而起。",
+					"RstText": "",
+					"Priority": 0,
+					"Condition": "home==4",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Minionnie",
+					"Title": "无业青年",
+					"Des": "都怪资本主义！",
+					"RstText": "你每一份工作都干不长，但也活得很轻松。",
+					"Priority": 0,
+					"Condition": "00000",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Helmetie",
+					"Title": "送外卖",
+					"Des": "严禁偷吃。",
+					"RstText": "你常常把快递标记为已经送达，但是其实没有。",
+					"Priority": 0,
+					"Condition": "00001",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Brickie",
+					"Title": "建筑工人",
+					"Des": "这个工地已经在建10年了。",
+					"RstText": "你一边外放70年代摇滚金曲一边搬砖。",
+					"Priority": 0,
+					"Condition": "00010",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Mascotie",
+					"Title": "吉祥物",
+					"Des": "没有人可以拒绝可爱的河宝。",
+					"RstText": "你负责扮演河马市吉祥物河宝。",
+					"Priority": 0,
+					"Condition": "00100",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Smilie",
+					"Title": "服务员",
+					"Des": "用心做好每一杯奶茶。",
+					"RstText": "人们点餐的时候甚至不会看你的脸。",
+					"Priority": 0,
+					"Condition": "01000",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Servantie",
+					"Title": "公务员",
+					"Des": "适合喜欢稳定和无聊的人。",
+					"RstText": "你负责指导别人填表。",
+					"Priority": 0,
+					"Condition": "10000",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Triathlonie",
+					"Title": "铁人三项运动员",
+					"Des": "你无法从游泳、骑车和跑步里选出最爱的一项运动。",
+					"RstText": "你每天快乐地往前冲。",
+					"Priority": 0,
+					"Condition": "00011",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Scissorie",
+					"Title": "理发师",
+					"Des": "现在你知道街上那些难看的发型都是出自谁手了。",
+					"RstText": "大家都叫你剪刀手Tony。",
+					"Priority": 0,
+					"Condition": "00101",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Cauldronie",
+					"Title": "餐馆大厨",
+					"Des": "可以偷吃一点点。",
+					"RstText": "人人都称赞你的手艺，但这都归功于你帽子里的老鼠。",
+					"Priority": 0,
+					"Condition": "00110",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Guidie",
+					"Title": "城市导游",
+					"Des": "为那些懒得上网查询景点信息的人复述一遍。",
+					"RstText": "你每天重复介绍人们自己就能上网查到的信息。",
+					"Priority": 0,
+					"Condition": "01001",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Charmie",
+					"Title": "健美运动员",
+					"Des": "美丽的肌肉就是要展示给所有人看。",
+					"RstText": "你喜欢在人前控制自己的胸肌跳动。",
+					"Priority": 0,
+					"Condition": "01010",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Parent_to_Bie",
+					"Title": "准父母",
+					"Des": "在辅助生殖技术的帮助下，无论性别都可以怀孕生子。",
+					"RstText": "你已经很久没有睡过一个完整的觉了。",
+					"Priority": 0,
+					"Condition": "01100",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Polizie",
+					"Title": "警察",
+					"Des": "当你手上有警棍的时候，看谁都像是罪犯。",
+					"RstText": "你不停喝酒，而且努力压低自己的嗓音来假装自己是个资深侦探。",
+					"Priority": 0,
+					"Condition": "10001",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Knightie",
+					"Title": "考古专家",
+					"Des": "河马市需要更多的考古学家来发掘本地的文物和古迹。",
+					"RstText": "你不小心破坏了文物，然后告诉别人这是自然原因造成的。",
+					"Priority": 0,
+					"Condition": "10010",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Keyboardie",
+					"Title": "程序员",
+					"Des": "薪水不错。",
+					"RstText": "你每天加班，头发越来越少。",
+					"Priority": 0,
+					"Condition": "10100",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Fraudie",
+					"Title": "群众演员",
+					"Des": "恐怖片剧组正在招募大量扮演僵尸的群众演员。",
+					"RstText": "你每天扮演形形色色的僵尸。",
+					"Priority": 0,
+					"Condition": "11000",
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Shootie",
+					"Title": "老兵",
+					"Des": "部队正在征兵，你决定应征。",
+					"RstText": "你是部队的射击大赛金牌得主。",
+					"Priority": 0,
+					"Condition": "00111",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Cocktailie",
+					"Title": "调酒师",
+					"Des": "你想找个地方，天天看球赛。",
+					"RstText": "你最擅长的事是把两种液体混在一起。",
+					"Priority": 0,
+					"Condition": "01011",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Gluttonie",
+					"Title": "吃播",
+					"Des": "你…很能吃。人们可能会喜欢看你吃东西。",
+					"RstText": "你确实能吃。",
+					"Priority": 0,
+					"Condition": "01101",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Black_Beltie",
+					"Title": "空手道教练",
+					"Des": "空手道训练馆联系你，说有一个教练的空缺，专教低幼组。",
+					"RstText": "有时你觉得，家长们只是单纯不想带孩子才送他们来上课。",
+					"Priority": 0,
+					"Condition": "01110",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Boomie",
+					"Title": "工程师",
+					"Des": "河马市正计划造一批新房，因此有很多工程师岗位空缺。",
+					"RstText": "你拆掉一排排老房子，然后又在原地造了一堆质量更差的新房。",
+					"Priority": 0,
+					"Condition": "10011",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Time_Wanderie",
+					"Title": "时间旅行者",
+					"Des": "你意外获得了在过去和未来自由穿梭的能力。但是你的父母觉得这只是你不想找工作胡编的借口。",
+					"RstText": "你引发了很多蝴蝶效应。但你可管不了那么多。",
+					"Priority": 0,
+					"Condition": "10101",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Combat_Medie",
+					"Title": "外科医生",
+					"Des": "你的刀法精湛，但屠宰场的薪水太低了。",
+					"RstText": "你喜欢谎称手术失败来吓唬病人家属。",
+					"Priority": 0,
+					"Condition": "10110",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Comedie",
+					"Title": "电视主持人",
+					"Des": "你觉得自己很有戏剧天赋，所以当电视台在招收节目主持人的时候你第一时间报名了。",
+					"RstText": "你用罐头笑声来让节目显得好笑。你发现大部分人都会被带动着一起笑。",
+					"Priority": 0,
+					"Condition": "11001",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Cat_Keeperie",
+					"Title": "驯兽师",
+					"Des": "马戏团的驯兽师被狮子吃了，急聘驯兽师！",
+					"RstText": "动物演员们在你的指挥下非常有礼貌。",
+					"Priority": 0,
+					"Condition": "11010",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Telekinetie",
+					"Title": "超能力者",
+					"Des": "你能靠念力来移动物体。但是为了生活你只能在马戏团假装自己是魔术师。",
+					"RstText": "每次在表演开头，你都会坦言自己有超能力。只有小孩子相信你的话。",
+					"Priority": 0,
+					"Condition": "11100",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Necromancie",
+					"Title": "市长",
+					"Des": "你在社交网络上很有人气，希望你参选市长的呼声越来越高。",
+					"RstText": "你每天在网上抹黑对手，最终成功赢得了竞选。",
+					"Priority": 0,
+					"Condition": "01111",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Frankenstie",
+					"Title": "疯狂科学家",
+					"Des": "河马市医疗实验中心邀请你加入，一起为人类的进化做出贡献。",
+					"RstText": "每当有了新的研究发现，你总是先在自己身上做实验。",
+					"Priority": 0,
+					"Condition": "10111",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Rockie",
+					"Title": "摇滚歌手",
+					"Des": "你和朋友一起写了几首歌，想要寄给唱片公司看看能不能火。",
+					"RstText": "你成了超级巨星，一出场就会引发人群的尖叫。",
+					"Priority": 0,
+					"Condition": "11011",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Vampirie",
+					"Title": "金融巨鳄",
+					"Des": "工作是为了赚钱。而你喜欢用钱来赚更多的钱。",
+					"RstText": "你在股市呼风唤雨，成了河马市首富。",
+					"Priority": 0,
+					"Condition": "11101",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "Superzombie",
+					"Title": "超级英雄",
+					"Des": "你的钢铁之躯无惧子弹。你决定做一个义警守护河马市。",
+					"RstText": "见义勇为不能赚钱，因此你时不时接一些广告代言。",
+					"Priority": 0,
+					"Condition": "11110",
+					"LockedInDemo": true,
+					"Icon": "",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "come_of_age",
+					"Title": "毕业仪式",
+					"Des": "",
+					"RstText": "你从高中毕业了！直接就业，或是继续升学，今后的路要靠你自己选择。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "school",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "job_fair",
+					"Title": "招聘会",
+					"Des": "",
+					"RstText": "你从{school}毕业了，是时候选择一份职业了。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "market_square",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "begin0",
+					"Title": "陋巷",
+					"Des": "",
+					"RstText": "你出生在河马市一条不起眼的陋巷，一家三口人挤在不足20平的出租屋里。[p]在你10岁生日这天，你爸神神秘秘地递给你一张小卡片……",
+					"Priority": 0,
+					"Condition": "age==10, home==0",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "begin1",
+					"Title": "城市公寓",
+					"Des": "",
+					"RstText": "你出生在河马市中心的一间公寓里。为了还清剩余20年的房贷，你的父母都在努力工作。[p]在你10岁生日这天，你妈给你报名了辅导班……",
+					"Priority": 0,
+					"Condition": "age==10, home==1",
+					"LockedInDemo": false,
+					"RstValue": "money+50",
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "begin2",
+					"Title": "联排别墅",
+					"Des": "",
+					"RstText": "你出生在河马市老城区的联排别墅里。你家吃穿用度比一般同学都要好，但你爸妈还是常常抱怨钱不够花。",
+					"Priority": 0,
+					"Condition": "age==10, home==2",
+					"LockedInDemo": false,
+					"RstValue": "money+100",
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "begin3",
+					"Title": "花园洋房",
+					"Des": "",
+					"RstText": "你出生在河马市郊的一栋豪宅里。你常常会羡慕其他同学可以走路去学校，不像你每天都有司机接送，一点都不自由。",
+					"Priority": 0,
+					"Condition": "age==10, home==3",
+					"LockedInDemo": false,
+					"RstValue": "money+200",
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "begin4",
+					"Title": "学院",
+					"Des": "",
+					"RstText": "从你有记忆里来，就一直住在“学院”里。学院里有慈祥的校长、友善的老师，还有很多可爱的同学，你每天都过得很开心。",
+					"Priority": 0,
+					"Condition": "age==10, home==4",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "mysterious_gift",
+					"Title": "神秘商人的礼物",
+					"Des": "",
+					"RstText": "你在街上闲逛，突然被一个穿着斗篷的神秘商人拦下。[p]“小朋友，我看你天资聪颖，将来一定能成就一番大事业。这个放大镜能够预知未来，既然你我有缘，我就免费送给你吧！”",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Condition": "age==11",
+					"RstValue": "magnifier=1, magnifierDelivery+1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "mysterious_gift1",
+					"Title": "神秘商人的礼物",
+					"Des": "",
+					"RstText": "你在街上闲逛，突然被一个穿着斗篷的神秘商人拦下。[p]“小朋友，拿着这个放大镜，你一定已经知道怎么用了！”",
+					"Priority": 1,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Condition": "age==11, magnifierDelivery>1",
+					"RstValue": "magnifier=1, magnifierDelivery+1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "mysterious_gift2",
+					"Title": "神秘商人的礼物",
+					"Des": "",
+					"RstText": "神秘商人又（？）出现了。他一边塞给你一个放大镜，一边嚷嚷。[p]“快拿着吧！我到底还要来多少次！”",
+					"Priority": 2,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Condition": "age==11, magnifierDelivery>3",
+					"RstValue": "magnifier=1, magnifierDelivery+1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "mysterious_gift3",
+					"Title": "神秘商人的礼物",
+					"Des": "",
+					"RstText": "一个神秘商人扛着一袋麻袋经过你家门口，并从麻袋里掏出一个放大镜到你家的邮箱里。[p]“不说了。今天还要送好几趟。”",
+					"Priority": 3,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"RstValue": "magnifier=1, magnifierDelivery+1",
+					"Condition": "age==11, magnifierDelivery>5",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "mysterious_gift4",
+					"Title": "神秘商人的礼物",
+					"Des": "",
+					"RstText": "一个放大镜不知道从哪里砸到了你手里。天空中传来一个声音：[p]“接好了！别弄丢了！”",
+					"Priority": 4,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Condition": "age==11, magnifierDelivery>7",
+					"RstValue": "magnifier=1, magnifierDelivery+1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "mysterious_gift5",
+					"Title": "神秘商人的礼物",
+					"Des": "",
+					"RstText": "你妈交给你一个放大镜。说是街上有个怪人非要把它交给她。",
+					"Priority": 5,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"RstValue": "magnifier=1, magnifierDelivery+1",
+					"Condition": "age==11, magnifierDelivery>7, rnd>33",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "mysterious_gift6",
+					"Title": "神秘商人的礼物",
+					"Des": "",
+					"RstText": "你在街上闲逛。迎面突然驶来一辆摩托车，并在即将撞向你的时候拐了个弯。穿斗篷的骑手抛给你一个放大镜，你还没来得及问话，他就骑车远去，后面还跟着两辆警车。",
+					"Priority": 6,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Condition": "age==11, magnifierDelivery>7, rnd>66",
+					"RstValue": "magnifier=1, magnifierDelivery+1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "high1",
+					"Title": "上高中",
+					"Des": "",
+					"RstText": "你以优秀的成绩升上了高中。老师们对你寄予厚望。",
+					"Priority": 10,
+					"Condition": "age==14, int>=30",
+					"LockedInDemo": false,
+					"Icon": "school",
+					"RstValue": "item_booklet=1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "high2",
+					"Title": "上高中",
+					"Des": "",
+					"RstText": "初中毕业了，你的成绩普普通通。在高中继续努力吧。",
+					"Priority": 8,
+					"Condition": "age==14, int>=10",
+					"LockedInDemo": false,
+					"Icon": "school",
+					"RstValue": "item_booklet=1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "high4",
+					"Title": "上高中",
+					"Des": "",
+					"RstText": "你勉强考上了高中。学习并不是你的强项，但你还有别的特长，继续精进吧！",
+					"Priority": 1,
+					"LockedInDemo": false,
+					"Icon": "school",
+					"Condition": "age==14, maxAttribute>=30",
+					"RstValue": "item_booklet=1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "high3",
+					"Title": "上高中",
+					"Des": "",
+					"RstText": "你勉强考上了高中。以你目前的成绩，估计很难再继续升学了。",
+					"Priority": 0,
+					"Condition": "age==14",
+					"LockedInDemo": false,
+					"Icon": "school",
+					"RstValue": "item_booklet=1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "proxy",
+					"Title": "代考",
+					"Des": "",
+					"RstText": "马上就是毕业考了，但是你的分数还是达不到市立大学的入学标准。[p]还好你爸有先见之明，花钱给你找了代考。",
+					"Priority": 10,
+					"RstValue": "proxy=1",
+					"Condition": "age==17, home==3, score<60",
+					"LockedInDemo": false,
+					"Icon": "school",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "proxy_request",
+					"Title": "代考委托",
+					"Des": "",
+					"RstText": "你被校长叫到了办公室。[p]“你的成绩很好，但我听说你的父母供不起你上大学。如果你还想继续升学，下周就去这个地方。只要做几道题，就能赚到学费。”校长向你挤挤眼，“当然，这件事绝不能外传。”",
+					"Priority": 10,
+					"RstValue": "proxy_request=1",
+					"Condition": "age==17, int>=85,  home<2",
+					"LockedInDemo": false,
+					"Icon": "school",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "agi_makeup",
+					"Title": "打蚊子",
+					"Des": "",
+					"RstText": "天气转暖，蚊子渐渐多了起来。你每天用电蚊拍打蚊子，不知不觉身手越来越敏捷。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Condition": "luck>=80, agi_makeup==0",
+					"RstValue": "agi+5, agi_makeup+1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "end_makeup",
+					"Title": "冷水澡",
+					"Des": "",
+					"RstText": "你开始坚持每天洗冷水澡。你的身体更强壮了。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"RstValue": "end+5, end_makeup+1",
+					"Condition": "luck>=80, end_makeup==0",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "str_makeup",
+					"Title": "大鼓达人",
+					"Des": "",
+					"RstText": "你最近迷上了打鼓。虽然打得很一般，但手臂力气却越来越大。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"RstValue": "str+5, str_makeup+1",
+					"Condition": "luck>=80, str_makeup==0",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pop_makeup",
+					"Title": "一夜爆红",
+					"Des": "",
+					"RstText": "你三年前在社交网络上发布的一张自拍突然火了。原因是网友认出背景里有一个模糊的UFO。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Condition": "luck>=80, pop_makeup==0",
+					"RstValue": "pop+5, pop_makeup+1",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "int_makeup",
+					"Title": "梦中授课",
+					"Des": "",
+					"RstText": "你最近经常梦到一只蜥蜴在教你量子力学。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"RstValue": "int+5, int_makeup+1",
+					"Condition": "luck>=80, int_makeup==0",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "graduation_trip_agi",
+					"Title": "毕业旅行",
+					"Des": "",
+					"RstText": "你约了几个要好的同学一起毕业旅行。你们在郊外露营。你时不时跟野兔赛跑，赢了很多胡萝卜。",
+					"Priority": 10,
+					"LockedInDemo": false,
+					"Icon": "party",
+					"Condition": "age==18, agi>=95,  agi<100",
+					"RstValue": "agi+5",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "graduation_trip_end",
+					"Title": "毕业旅行",
+					"Des": "",
+					"RstText": "你约了几个要好的同学一起毕业旅行。你们在郊外露营。你独自拣柴的时候遇到了棕熊。你赶紧憋气装死。棕熊拿出一块怀表计时。过了20分钟后，它确信你是死了，才遗憾地离开了。",
+					"Priority": 10,
+					"LockedInDemo": false,
+					"Icon": "party",
+					"Condition": "age==18, end>=95, end<100",
+					"RstValue": "end+5",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "graduation_trip_str",
+					"Title": "毕业旅行",
+					"Des": "",
+					"RstText": "你约了几个要好的同学一起毕业旅行。汽车半路抛锚，你徒手把车子推到了目的地。同学们都惊呆了。",
+					"Priority": 10,
+					"LockedInDemo": false,
+					"Icon": "party",
+					"Condition": "age==18, str>=95, str<100",
+					"RstValue": "str+5",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "graduation_trip_pop",
+					"Title": "毕业旅行",
+					"Des": "",
+					"RstText": "你约了几个要好的同学一起毕业旅行。你在社交网络上发帖邀请陌生人也来参加，结果得到了数万人点赞。现在你的毕业旅行已经升级成了河马市嘉年华。",
+					"Priority": 10,
+					"LockedInDemo": false,
+					"Icon": "party",
+					"Condition": "age==18, pop>=95, pop<100",
+					"RstValue": "pop+5",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "graduation_trip_int",
+					"Title": "毕业旅行",
+					"Des": "",
+					"RstText": "你约了几个要好的同学一起毕业旅行。你们一起参观了河马市博物馆。你动用你的历史知识，发现博物馆的一个藏品是赝品。你的事迹被《河马日报》报道了。",
+					"Priority": 10,
+					"LockedInDemo": false,
+					"Icon": "party",
+					"Condition": "age==18, int>=95, int<100",
+					"RstValue": "int+5",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pocket_money01",
+					"Title": "家贼",
+					"Des": "",
+					"RstText": "你爸没钱买烟了，所以他从你的存钱罐里偷走了几个硬币。",
+					"Priority": 0,
+					"RstValue": "money-3",
+					"Condition": "home==0, luck<20, money>=3",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pocket_money02",
+					"Title": "零花钱",
+					"Des": "",
+					"RstText": "你妈打牌赢了钱，大方地分给了你一点。“省着点花啊！”",
+					"Priority": 0,
+					"RstValue": "money+20",
+					"Condition": "home==0, luck>70",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pocket_money11",
+					"Title": "零花钱",
+					"Des": "",
+					"RstText": "“你是个大孩子了，要学会自己管钱了。”[p]你收到了人生第一笔零花钱。",
+					"Priority": 2,
+					"RstValue": "money+250",
+					"Condition": "home==1, age==10",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pocket_ap16",
+					"Title": "家道中落",
+					"Des": "",
+					"RstText": "明年你就要从高中毕业了，但是你爸被裁员后一直找不到工作，家里的经济十分紧张。看来升学的学费你得自己想办法解决了。",
+					"Priority": 5,
+					"LockedInDemo": false,
+					"Icon": "home",
+					"RstValue": "money+250",
+					"Condition": "home==1,age==16",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pocket_money",
+					"Title": "零花钱",
+					"Des": "",
+					"RstText": "今年的零花钱入账。",
+					"Priority": 0,
+					"RstValue": "money+250",
+					"Condition": "home==1",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pocket_money21",
+					"Title": "教育基金",
+					"Des": "",
+					"RstText": "从你刚出生开始，你爸妈就在给你存教育基金，今天终于可以取出来了。",
+					"Priority": 0,
+					"RstValue": "money+5500",
+					"Condition": "age==17, home==2",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "pocket_money31",
+					"Title": "大学学费",
+					"Des": "",
+					"RstText": "高中就快要毕业了，你的信托基金给你转了一笔钱，作为你的大学学费。",
+					"Priority": 0,
+					"RstValue": "money+23000",
+					"Condition": "age==17, home==3",
+					"LockedInDemo": false,
+					"Icon": "home",
+					"Rarity": 0,
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "coach_payback",
+					"Title": "感谢信",
+					"Des": "",
+					"RstText": "你收到了一封信，信里只写了两个字“谢谢”，落款是一个戴着礼帽的河马，你认出这是河马公爵的家徽。除此之外，信里还有厚厚一叠现金。",
+					"Priority": 1,
+					"LockedInDemo": false,
+					"Icon": "",
+					"Rarity": 0,
+					"Condition": "coach_missing==4",
+					"RstValue": "money+1500, coach_missing=-1",
+					"EventType": 0,
+					"Bool": false
+				},
+				{
+					"Id": "gangster_student",
+					"Title": "长线投资",
+					"Des": "黑鸭帮老大指名让你来见他。他说：“你很聪明，也很忠心。让你收保护费，太屈才了。我打算出钱供你读书。你要么去考警察，要么去考律师。毕业以后，你就是我们在白道上的王牌。”",
+					"RstText": "gangster_student1, gangster_student2, gangster_student3",
+					"Priority": 99,
+					"LockedInDemo": false,
+					"Icon": "duck",
+					"Rarity": 0,
+					"EventType": 32,
+					"Condition": "gangster>0, int>=6000, str>=60",
+					"Bool": false
+				},
+				{
+					"Id": "gangster_student1",
+					"Title": "",
+					"Des": "听从老大的建议，考律师。",
+					"RstText": "你进了法学院，努力学习法律。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"EventType": 4,
+					"Icon": "duck",
+					"Rarity": 0,
+					"RstValue": "gangster_lawyer=1",
+					"Bool": false
+				},
+				{
+					"Id": "gangster_student2",
+					"Title": "",
+					"Des": "听从老大的建议，考警察。",
+					"RstText": "你考进了警校。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"EventType": 4,
+					"Icon": "duck",
+					"Rarity": 0,
+					"RstValue": "gangster_police=1",
+					"Bool": false
+				},
+				{
+					"Id": "gangster_student3",
+					"Title": "",
+					"Des": "还是算了。",
+					"RstText": "你没有听从老大的建议。他对你很失望。",
+					"Priority": 0,
+					"LockedInDemo": false,
+					"EventType": 4,
+					"Icon": "duck",
+					"Rarity": 0,
+					"Bool": false
+				}
+			],
+			"separators": [
+				0,
+				4,
+				9,
+				19,
+				26,
+				31,
+				62,
+				64,
+				92,
+				100
+			],
+			"props": {
+				"separatorTitles": [
+					"school_offer",
+					"vocational_major",
+					"college_major",
+					"university_major",
+					"special_job",
+					"job_offer",
+					"fixed_event",
+					"spring_event",
+					"winter_event",
+					"special_offer"
+				]
+			}
+		},
+		{
+			"name": "Location",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "Id",
+					"display": null
+				},
+				{
+					"typeStr": "2",
+					"name": "IsUnlocked"
+				},
+				{
+					"typeStr": "2",
+					"name": "IsHome"
+				},
+				{
+					"typeStr": "3",
+					"name": "UnlockLevel"
+				},
+				{
+					"typeStr": "1",
+					"name": "Name"
+				},
+				{
+					"typeStr": "2",
+					"name": "LockedInDemo"
+				}
+			],
+			"lines": [
+				{
+					"Id": "snack_street",
+					"Name": "小吃街",
+					"IsUnlocked": true,
+					"IsHome": false,
+					"LockedInDemo": false,
+					"UnlockLevel": 0
+				},
+				{
+					"Id": "library",
+					"IsUnlocked": true,
+					"Name": "图书馆",
+					"IsHome": false,
+					"LockedInDemo": false,
+					"UnlockLevel": 0
+				},
+				{
+					"Id": "railway_station",
+					"IsUnlocked": true,
+					"Name": "火车站",
+					"IsHome": false,
+					"LockedInDemo": false,
+					"UnlockLevel": 0
+				},
+				{
+					"Id": "gym_park",
+					"IsUnlocked": true,
+					"Name": "体育公园",
+					"IsHome": false,
+					"LockedInDemo": false,
+					"UnlockLevel": 0
+				},
+				{
+					"Id": "school",
+					"IsUnlocked": true,
+					"Name": "河马中学",
+					"IsHome": false,
+					"LockedInDemo": false,
+					"UnlockLevel": 0
+				},
+				{
+					"Id": "training_center",
+					"IsUnlocked": false,
+					"Name": "培训中心",
+					"IsHome": false,
+					"LockedInDemo": false,
+					"UnlockLevel": 1
+				},
+				{
+					"Id": "mall",
+					"IsUnlocked": false,
+					"Name": "商场",
+					"IsHome": false,
+					"LockedInDemo": true,
+					"UnlockLevel": 3
+				},
+				{
+					"Id": "market_square",
+					"IsUnlocked": false,
+					"Name": "市集广场",
+					"IsHome": false,
+					"LockedInDemo": true,
+					"UnlockLevel": 3
+				},
+				{
+					"Id": "castle_region",
+					"IsUnlocked": false,
+					"Name": "河马城堡",
+					"IsHome": false,
+					"LockedInDemo": true,
+					"UnlockLevel": 4
+				},
+				{
+					"Id": "golden_hills",
+					"IsUnlocked": false,
+					"Name": "金丘",
+					"IsHome": false,
+					"LockedInDemo": true,
+					"UnlockLevel": 5
+				},
+				{
+					"Id": "university",
+					"IsUnlocked": false,
+					"Name": "市立大学",
+					"IsHome": false,
+					"LockedInDemo": true,
+					"UnlockLevel": -1
+				},
+				{
+					"Id": "college",
+					"IsUnlocked": false,
+					"Name": "社区大学",
+					"IsHome": false,
+					"LockedInDemo": false,
+					"UnlockLevel": -1
+				},
+				{
+					"Id": "pyramid",
+					"IsUnlocked": false,
+					"IsHome": false,
+					"Name": "金字塔",
+					"LockedInDemo": true,
+					"UnlockLevel": -1
+				},
+				{
+					"Id": "slum",
+					"IsUnlocked": false,
+					"Name": "陋巷",
+					"IsHome": true,
+					"LockedInDemo": false,
+					"UnlockLevel": 0
+				},
+				{
+					"Id": "apartment",
+					"IsUnlocked": false,
+					"Name": "公寓",
+					"IsHome": true,
+					"LockedInDemo": false,
+					"UnlockLevel": 1
+				},
+				{
+					"Id": "house",
+					"IsUnlocked": false,
+					"Name": "联排别墅",
+					"IsHome": true,
+					"LockedInDemo": false,
+					"UnlockLevel": 3
+				},
+				{
+					"Id": "villa",
+					"IsUnlocked": false,
+					"Name": "花园洋房",
+					"IsHome": true,
+					"LockedInDemo": false,
+					"UnlockLevel": 5
+				},
+				{
+					"Id": "research_center",
+					"IsUnlocked": false,
+					"Name": "医学研究中心",
+					"IsHome": true,
+					"LockedInDemo": false,
+					"UnlockLevel": 6
+				}
+			],
+			"separators": [
+				0,
+				13
+			],
+			"props": {
+				"separatorTitles": [
+					"onmap",
+					"homes"
+				]
+			}
+		},
+		{
+			"name": "Zombie",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "Id"
+				},
+				{
+					"typeStr": "1",
+					"name": "Name"
+				},
+				{
+					"typeStr": "1",
+					"name": "Des",
+					"display": null
+				},
+				{
+					"typeStr": "1",
+					"name": "SkillDes"
+				},
+				{
+					"typeStr": "2",
+					"name": "IsSpecial"
+				},
+				{
+					"typeStr": "3",
+					"name": "Rank"
+				},
+				{
+					"typeStr": "4",
+					"name": "Durability"
+				},
+				{
+					"typeStr": "4",
+					"name": "Speed"
+				},
+				{
+					"typeStr": "4",
+					"name": "CDTime"
+				},
+				{
+					"typeStr": "4",
+					"name": "Attack"
+				},
+				{
+					"typeStr": "3",
+					"name": "Cost"
+				}
+			],
+			"lines": [
+				{
+					"Id": "runner",
+					"Des": "",
+					"Rank": 0,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "铁人三项僵尸2",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "swimmer",
+					"Des": "",
+					"Rank": 0,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 0.5,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "铁人三项僵尸3",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Cat_Tuxedo",
+					"Name": "奶牛猫僵尸",
+					"Des": "",
+					"SkillDes": "",
+					"IsSpecial": false,
+					"Rank": 0,
+					"Durability": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"Attack": 1,
+					"Cost": 0
+				},
+				{
+					"Id": "Cat_Orange",
+					"Name": "橘猫僵尸",
+					"Des": "",
+					"SkillDes": "",
+					"IsSpecial": false,
+					"Rank": 0,
+					"Durability": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"Attack": 1,
+					"Cost": 0
+				},
+				{
+					"Id": "Dog",
+					"Name": "狗狗僵尸",
+					"Des": "",
+					"SkillDes": "",
+					"IsSpecial": false,
+					"Rank": 0,
+					"Durability": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"Attack": 1,
+					"Cost": 0
+				},
+				{
+					"Id": "Originie",
+					"Des": "河马市的第一个僵尸，过往经历不详。",
+					"Rank": 0,
+					"Durability": 1,
+					"Attack": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "元祖僵尸",
+					"SkillDes": "无特殊技能。",
+					"Cost": 0
+				},
+				{
+					"Id": "Minionnie",
+					"Des": "随处可见的普通僵尸。很弱，但却总也杀不完。",
+					"Rank": 1,
+					"Durability": 1,
+					"Attack": 0.5,
+					"Speed": 1,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "喽啰僵尸",
+					"SkillDes": "无特殊技能。",
+					"Cost": 0
+				},
+				{
+					"Id": "Indie",
+					"Name": "独游僵尸",
+					"Des": "本Demo的特殊赠品。因为生前长期熬夜制作游戏而营养不良，毫无战斗力。",
+					"SkillDes": "无特殊技能。",
+					"IsSpecial": false,
+					"Rank": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"Attack": 1,
+					"Cost": 0
+				},
+				{
+					"Id": "Helmetie",
+					"Des": "死后也要遵守交通法。",
+					"Rank": 4,
+					"Durability": 1.5,
+					"Attack": 0.33,
+					"Speed": 1.5,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "头盔僵尸",
+					"SkillDes": "头戴头盔，防御力增加。速度极快。",
+					"Cost": 0
+				},
+				{
+					"Id": "Brickie",
+					"Des": "小小的板砖蕴含着大大的力量。",
+					"Rank": 2,
+					"Durability": 1,
+					"Attack": 1.5,
+					"Speed": 1,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "板砖僵尸",
+					"SkillDes": "手拿板砖，攻击力增加。",
+					"Cost": 0
+				},
+				{
+					"Id": "Mascotie",
+					"Des": "人见人爱的河宝僵尸。",
+					"Rank": 3,
+					"Durability": 1.5,
+					"Attack": 1,
+					"Speed": 0.9,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "玩偶服僵尸",
+					"SkillDes": "身穿玩偶服，防御力增加，速度降低。",
+					"Cost": 0
+				},
+				{
+					"Id": "Smilie",
+					"Des": "保持微笑，服务周到。",
+					"Rank": 4,
+					"Durability": 1,
+					"Attack": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"IsSpecial": true,
+					"Name": "微笑僵尸",
+					"SkillDes": "僵尸上场总数+1。",
+					"Cost": 0
+				},
+				{
+					"Id": "Servantie",
+					"Des": "虽然名字叫公仆，对其它僵尸的态度却很差。",
+					"Rank": 1,
+					"Durability": 1,
+					"Attack": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "公仆僵尸",
+					"SkillDes": "无特殊技能。",
+					"Cost": 0
+				},
+				{
+					"Id": "Triathlonie",
+					"Des": "生当作人杰，死亦为尸雄。",
+					"Rank": 5,
+					"Durability": 1,
+					"Attack": 1,
+					"Speed": 2,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "铁人三项僵尸",
+					"SkillDes": "即使被打残了，也会继续战斗。",
+					"Cost": 0
+				},
+				{
+					"Id": "Scissorie",
+					"Des": "僵尸社群的时尚顾问。",
+					"Rank": 4,
+					"Durability": 1,
+					"Attack": 2,
+					"Speed": 1,
+					"CDTime": 1,
+					"IsSpecial": false,
+					"Name": "剪刀手僵尸",
+					"SkillDes": "手持利器，攻击力增加。",
+					"Cost": 0
+				},
+				{
+					"Id": "Cauldronie",
+					"Des": "“大脑…好吃…！”",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 5,
+					"Attack": 1.5,
+					"Durability": 2,
+					"Speed": 0.9,
+					"Name": "铁锅僵尸",
+					"SkillDes": "身体藏在锅里，防御力增加。",
+					"Cost": 0
+				},
+				{
+					"Id": "Guidie",
+					"Des": "最熟悉河马市的僵尸，广受好评的开路先锋。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 6,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "导游僵尸",
+					"SkillDes": "僵尸上场总数+2。",
+					"Cost": 0
+				},
+				{
+					"Id": "Charmie",
+					"Des": "美丽肌肉，可爱肌肉。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 4,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "迷人僵尸",
+					"SkillDes": "增加全体防御力。",
+					"Cost": 0
+				},
+				{
+					"Id": "Parent_to_Bie",
+					"Des": "“河马市并非一个对僵尸友好的城市，我选择为我的孩子而战。”",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 4,
+					"Attack": 1.5,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "预产期僵尸",
+					"SkillDes": "会诞下婴儿僵尸。",
+					"Cost": 0
+				},
+				{
+					"Id": "Polizie",
+					"Des": "总以为自己很厉害，但其实大家只是害怕他手里的棍子。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 6,
+					"Attack": 2,
+					"Durability": 2,
+					"Speed": 1,
+					"Name": "条子僵尸",
+					"SkillDes": "手持警棍，攻击力强。",
+					"Cost": 0
+				},
+				{
+					"Id": "Knightie",
+					"Des": "曾经是一名考古学家，如今骑着巨型河马战斗。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 5,
+					"Attack": 3,
+					"Durability": 1.5,
+					"Speed": 1.25,
+					"Name": "巨河马骑尸",
+					"SkillDes": "攻击力与防御力大幅提升。",
+					"Cost": 0
+				},
+				{
+					"Id": "Keyboardie",
+					"Des": "正在用业余时间做一款面向僵尸的社交网络应用。",
+					"IsSpecial": false,
+					"CDTime": 0.5,
+					"Rank": 2,
+					"Attack": 1,
+					"Durability": 0.75,
+					"Speed": 1,
+					"Name": "键盘僵尸",
+					"SkillDes": "只是一名普通的码农。",
+					"Cost": 0
+				},
+				{
+					"Id": "Fraudie",
+					"Des": "因为出演僵尸角色过于入戏，成功混入了僵尸群。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 1,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "假僵尸",
+					"SkillDes": "无特殊技能。",
+					"Cost": 0
+				},
+				{
+					"Id": "Shootie",
+					"Des": "老兵不死，只是[s]凋零[/s]咬人。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 8,
+					"Attack": 2,
+					"Durability": 2,
+					"Speed": 1,
+					"Name": "步枪僵尸",
+					"SkillDes": "使用步枪射击敌人。",
+					"Cost": 0
+				},
+				{
+					"Id": "Cocktailie",
+					"Des": "“你也喜欢血腥玛丽吗？我刚刚咬过一位，很新鲜。”",
+					"IsSpecial": false,
+					"CDTime": 2,
+					"Rank": 6,
+					"Attack": 10,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "鸡尾酒僵尸",
+					"SkillDes": "调制燃烧瓶摧毁障碍。",
+					"Cost": 0
+				},
+				{
+					"Id": "Gluttonie",
+					"Des": "\"嗝~“",
+					"IsSpecial": false,
+					"CDTime": 0.5,
+					"Rank": 6,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "大胃王僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Black_Beltie",
+					"Des": "他给空手道加入了咬人的技巧。反对他的顽固分子都被咬死了。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 6,
+					"Attack": 2,
+					"Durability": 2,
+					"Speed": 1,
+					"Name": "黑带僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Boomie",
+					"Des": "\"是时候把我以前建过的房子再拆掉了。”",
+					"IsSpecial": false,
+					"CDTime": 5,
+					"Rank": 6,
+					"Attack": 50,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "爆破僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Time_Wanderie",
+					"Des": "\"我是谁？我在哪儿？“",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 3,
+					"Attack": 6.5,
+					"Durability": 1.5,
+					"Speed": 1,
+					"Name": "穿越僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Combat_Medie",
+					"Des": "",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 6,
+					"Attack": 1,
+					"Durability": 1.5,
+					"Speed": 1.5,
+					"Name": "战地医尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Comedie",
+					"Des": "“你没法取悦所有人，尤其是在你想咬他们的时候。”",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 6,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "喜剧僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Cat_Keeperie",
+					"Des": "猫不关心你是人还是僵尸。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 7,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "训猫僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Telekinetie",
+					"Des": "",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 6,
+					"Attack": 1,
+					"Durability": 1,
+					"Speed": 1,
+					"Name": "念力僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Necromancie",
+					"Des": "只要你说一些屁话，就会有人愿意为你送死。",
+					"IsSpecial": false,
+					"CDTime": 2,
+					"Rank": 8,
+					"Attack": 0,
+					"Durability": 2,
+					"Speed": 1,
+					"Name": "死灵法尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Frankie",
+					"Des": "在变成僵尸之前就很难算是个人了。",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 9,
+					"Attack": 5,
+					"Durability": 4,
+					"Speed": 1,
+					"Name": "弗兰肯僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Idolie",
+					"Des": "狂帅炫酷吊炸天！",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 8,
+					"Attack": 2,
+					"Durability": 2,
+					"Speed": 1,
+					"Name": "摇滚僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Vampirie",
+					"Des": "",
+					"IsSpecial": false,
+					"CDTime": 1,
+					"Rank": 8,
+					"Attack": 3,
+					"Durability": 5,
+					"Speed": 1.5,
+					"Name": "吸血僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Superzombie",
+					"Des": "",
+					"IsSpecial": false,
+					"CDTime": 0,
+					"Rank": 8,
+					"Attack": 1,
+					"Durability": 99,
+					"Speed": 2,
+					"Name": "超级僵尸",
+					"SkillDes": "",
+					"Cost": 0
+				},
+				{
+					"Id": "Veggie",
+					"Name": "素食僵尸",
+					"Des": "生前从不吃肉，变成僵尸后也只爱咬植物人。",
+					"SkillDes": "",
+					"IsSpecial": false,
+					"Rank": 0,
+					"Durability": 1,
+					"Speed": 1,
+					"CDTime": 7,
+					"Attack": 1,
+					"Cost": 1
+				},
+				{
+					"Id": "Richie",
+					"Name": "暴发户僵尸",
+					"Des": "有钱才是最大的超能力。",
+					"SkillDes": "",
+					"IsSpecial": false,
+					"Rank": 1,
+					"Durability": 1,
+					"Speed": 2,
+					"CDTime": 1,
+					"Attack": 1,
+					"Cost": 1
+				},
+				{
+					"Id": "Dog_Keeperie",
+					"Name": "训狗僵尸",
+					"Des": "",
+					"SkillDes": "",
+					"IsSpecial": false,
+					"Rank": 7,
+					"Durability": 1,
+					"Speed": 1,
+					"CDTime": 1,
+					"Attack": 1,
+					"Cost": 0
+				}
+			],
+			"separators": [
+				0,
+				5
+			],
+			"props": {
+				"separatorTitles": [
+					"other",
+					"listed"
+				]
+			}
+		},
+		{
+			"name": "Level",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "Id"
+				},
+				{
+					"typeStr": "1",
+					"name": "Name",
+					"display": null
+				},
+				{
+					"typeStr": "3",
+					"name": "Difficulty"
+				},
+				{
+					"typeStr": "3",
+					"name": "MaxZombieCount"
+				},
+				{
+					"typeStr": "2",
+					"name": "LockedInDemo"
+				}
+			],
+			"lines": [
+				{
+					"Id": "0",
+					"Name": "slum",
+					"Difficulty": 1,
+					"LockedInDemo": false,
+					"MaxZombieCount": 3
+				},
+				{
+					"Id": "1",
+					"Name": "railway_station",
+					"Difficulty": 2,
+					"LockedInDemo": false,
+					"MaxZombieCount": 3
+				},
+				{
+					"Id": "2",
+					"Name": "mall",
+					"Difficulty": 3,
+					"LockedInDemo": false,
+					"MaxZombieCount": 3
+				},
+				{
+					"Id": "3",
+					"Name": "market_square",
+					"Difficulty": 4,
+					"LockedInDemo": true,
+					"MaxZombieCount": 3
+				}
+			],
+			"separators": [],
+			"props": {}
+		},
+		{
+			"name": "Item",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "Id"
+				},
+				{
+					"typeStr": "1",
+					"name": "Effects"
+				},
+				{
+					"typeStr": "2",
+					"name": "Readonly"
+				},
+				{
+					"name": "ref",
+					"typeStr": "6:EventCard"
+				}
+			],
+			"lines": [
+				{
+					"Id": "item_perfume",
+					"Effects": "greatly_increase_rate:Animal, tmp_effect:pop-5",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_clover",
+					"Effects": "tmp_effect:luck+20",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_fake_id",
+					"Effects": "greatly_increase_rate:Work, tmp_effect:working_age=10",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_leash",
+					"Effects": "greatly_increase_rate:Pet",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_bait",
+					"Effects": "greatly_increase_rate:Fishing",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_glasses",
+					"Effects": "increase_rate:Int, add_extra:int",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_rose",
+					"Effects": "increase_rate:Dating, add_extra:pop",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_tattoo",
+					"Effects": "increase_rate:Gangster",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_hoodie",
+					"Effects": "greatly_increase_rate:Hoodie",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_bookmark",
+					"Effects": "mid_increase_rate:SchoolClub",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_basketball",
+					"Effects": "mid_increase_rate:SchoolClub",
+					"Readonly": false,
+					"ref": "begin3"
+				},
+				{
+					"Id": "item_saxophone",
+					"Effects": "mid_increase_rate:SchoolClub",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_mirror",
+					"Effects": "mid_increase_rate:SchoolClub",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_shoe",
+					"Effects": "mid_increase_rate:SchoolClub",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_exercise_book",
+					"Effects": "greatly_increase_rate:IntClass",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_karate_belt",
+					"Effects": "greatly_increase_rate:StrClass",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_crystal",
+					"Effects": "greatly_increase_rate:EndClass",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_microphone",
+					"Effects": "greatly_increase_rate:PopClass",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_palette",
+					"Effects": "greatly_increase_rate:AgiClass",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_booklet",
+					"Effects": "",
+					"Readonly": true,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_rubik",
+					"Effects": "static_effect:int+1",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_shampoo",
+					"Effects": "static_effect:pop+1",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_skateboard",
+					"Effects": "static_effect:agi+1",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_needle",
+					"Effects": "static_effect:end+1",
+					"Readonly": false,
+					"ref": "vocational"
+				},
+				{
+					"Id": "item_wrist_weights",
+					"Effects": "static_effect:str+1",
+					"Readonly": false,
+					"ref": "vocational"
+				}
+			],
+			"separators": [],
+			"props": {}
+		},
+		{
+			"name": "Site",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "Id"
+				},
+				{
+					"typeStr": "3",
+					"name": "Cost"
+				}
+			],
+			"lines": [
+				{
+					"Cost": 0,
+					"Id": "Scrapyard"
+				},
+				{
+					"Id": "Billboard",
+					"Cost": 0
+				},
+				{
+					"Id": "Bar",
+					"Cost": 5
+				},
+				{
+					"Id": "RobotStation",
+					"Cost": 0
+				},
+				{
+					"Id": "Lab",
+					"Cost": 5
+				},
+				{
+					"Id": "Arena",
+					"Cost": 0
+				},
+				{
+					"Id": "Diner",
+					"Cost": 0
+				},
+				{
+					"Id": "TownCenter",
+					"Cost": 0
+				},
+				{
+					"Id": "Cheerleader",
+					"Cost": 0
+				},
+				{
+					"Id": "Casino",
+					"Cost": 0
+				},
+				{
+					"Id": "Salon",
+					"Cost": 0
+				},
+				{
+					"Id": "Beach",
+					"Cost": 0
+				},
+				{
+					"Id": "School",
+					"Cost": 0
+				}
+			],
+			"separators": [],
+			"props": {}
+		}
+	],
+	"customTypes": [],
+	"compress": false
+}

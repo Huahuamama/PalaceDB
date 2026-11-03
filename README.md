@@ -36,9 +36,11 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 
 然后：
 
-1. 下载 `PalaceDB-1.0-win-x64.zip`，解压到任意目录（程序是绿色的，不写注册表、不需要安装）。
+1. 从 [Releases](https://github.com/Huahuamama/PalaceDB/releases) 下载 `PalaceDB-1.0-win-x64.zip`，
+   解压到任意目录（程序是绿色的，不写注册表、不需要安装）。
 2. 双击 `PalaceDB.exe`。
 3. 把 `.cdb` 文件拖进窗口，或点 **Open a database...**。
+   手头没有 `.cdb` 就先打开仓库里的 [`samples/demo.cdb`](samples/demo.cdb) 看看。
 
 注意：自动备份写在 **`.cdb` 旁边**（`X.cdb.autobackup`），所以数据文件所在的目录要可写；
 把只读的样本放在 `Program Files` 里会备份失败（不影响编辑和保存）。
@@ -160,8 +162,24 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 
 ```bash
 dotnet build
-dotnet test tests/PalaceDB.Core.Tests/PalaceDB.Core.Tests.csproj
-python tests/ui/test_ui.py            # 端到端，需要先把应用编译出来
+dotnet test tests/PalaceDB.Core.Tests/PalaceDB.Core.Tests.csproj   # 665 个单元测试
+pip install websocket-client
+python tests/ui/test_ui.py                                        # 端到端，475 项检查
 ```
 
-测试用的样本数据库放在 `tests/fixtures/`，**不进仓库**（见开发者指南 §测试数据）。
+端到端测试会自己起一个真实的窗口，通过 WebView2 的调试协议操作 DOM；跑的时候别去动那个窗口。
+它默认打开 `tests/fixtures/TestData2.cdb`，也可以自己指定文件：
+`python tests/ui/test_ui.py path\to\other.cdb`。
+
+## 测试数据
+
+`tests/fixtures/` 里的 `TestData1.cdb`、`TestData2.cdb` 跟着仓库走，clone 下来就能跑测试。
+其余样本（`food.cdb` 和它的图片、文件目录）是开发机上用的真实数据，被 `.gitignore` 排除，
+想跑发布冒烟（`tools/release_smoke.py`）就自己放一个同名文件进去。
+
+`samples/demo.cdb` 是给用户看的示例库：两张表（`items` / `levels`）、九种列类型、
+三个小图标，随时可以拿来练手。
+
+## 许可
+
+[CC0 1.0](LICENSE) —— 公共领域奉献，随便用、随便改、不用署名。

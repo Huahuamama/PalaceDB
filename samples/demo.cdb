@@ -1,0 +1,113 @@
+{
+	"sheets": [
+		{
+			"name": "items",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "id"
+				},
+				{
+					"name": "name",
+					"typeStr": "1"
+				},
+				{
+					"name": "price",
+					"typeStr": "3"
+				},
+				{
+					"name": "stackable",
+					"typeStr": "2",
+					"defaultValue": true
+				},
+				{
+					"name": "rarity",
+					"typeStr": "5:Common,Uncommon,Rare"
+				},
+				{
+					"name": "tags",
+					"typeStr": "10:weapon,armor,consumable",
+					"opt": true
+				},
+				{
+					"name": "icon",
+					"typeStr": "7",
+					"opt": true
+				},
+				{
+					"name": "tint",
+					"typeStr": "11"
+				}
+			],
+			"lines": [
+				{
+					"id": "rusty_sword",
+					"name": "Rusty Sword",
+					"price": 12,
+					"stackable": false,
+					"rarity": 0,
+					"tags": 1,
+					"icon": "img/sword.png",
+					"tint": 9868950
+				},
+				{
+					"id": "healing_potion",
+					"name": "Healing Potion",
+					"price": 40,
+					"stackable": true,
+					"rarity": 1,
+					"tags": 4,
+					"icon": "img/potion.png",
+					"tint": 16711680
+				},
+				{
+					"id": "crown",
+					"name": "King's Crown",
+					"price": 1200,
+					"stackable": false,
+					"rarity": 2,
+					"tags": 2,
+					"tint": 16766720
+				}
+			]
+		},
+		{
+			"name": "levels",
+			"columns": [
+				{
+					"typeStr": "0",
+					"name": "id"
+				},
+				{
+					"name": "title",
+					"typeStr": "1"
+				},
+				{
+					"name": "reward",
+					"typeStr": "6:items",
+					"opt": true
+				},
+				{
+					"name": "notes",
+					"typeStr": "1",
+					"opt": true
+				}
+			],
+			"lines": [
+				{
+					"id": "forest",
+					"title": "The Whispering Forest",
+					"reward": "healing_potion",
+					"notes": "First combat tutorial."
+				},
+				{
+					"id": "throne",
+					"title": "Throne Room",
+					"reward": "crown"
+				}
+			]
+		}
+	],
+	"customTypes": [],
+	"compress": false
+}

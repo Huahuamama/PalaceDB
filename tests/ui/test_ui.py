@@ -14,8 +14,10 @@ import ctypes, json, os, shutil, subprocess, sys, time, urllib.request
 import base64
 import websocket
 
-ROOT = r"D:/Workplace/PalaceDB"
-EXE = os.path.join(ROOT, r"src\PalaceDB.App\bin\Debug\net8.0-windows\PalaceDB.exe")
+# Repository root, derived from this file so a clone in any directory works:
+# tests/ui/test_ui.py -> tests/ui -> tests -> <root>.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+EXE = os.path.join(ROOT, "src", "PalaceDB.App", "bin", "Debug", "net8.0-windows", "PalaceDB.exe")
 
 # Each run gets its own folder: deleting the previous one in bulk is both slow and
 # destructive-looking, and the artefacts are useful when a check fails.

@@ -8,8 +8,11 @@ obj/
 .ui-test-work/
 .shot-work/
 
-# Test data: real .cdb samples with their images. Local only — see README, "Test data".
-tests/fixtures/
+# Test data: the real .cdb samples with their images stay local. The two small files the
+# unit tests read are committed, so a fresh clone runs green — see README, "Test data".
+tests/fixtures/*
+!tests/fixtures/TestData1.cdb
+!tests/fixtures/TestData2.cdb
 
 # The release folder is published, not committed. Releases go to GitHub Releases.
 dist/
