@@ -95,15 +95,23 @@ export class CellEditor {
     // Text cells may hold line breaks, so they get an editor that can grow. Every
     // other type stays a single-line input where Enter simply commits.
     const multiline = column.type === 'Text';
+    // Set for a multi-line editor; called once it is in the document, because a detached
+    // textarea cannot be measured.
+    let grow = null;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'cell-editor';
     wrapper.style.left = left + 'px';
     wrapper.style.top = this.grid.topOf(row) + 'px';
     wrapper.style.width = width + 'px';
-    // An inline height would beat the stylesheet, so a growing editor sets none. The
-    // row's own height is used, because a row with wrapped text is taller than the base.
-    if (!multiline) wrapper.style.height = this.grid.heightOf(row) + 'px';
+    // The row is as tall as its tallest cell, so this cell can be much taller than one
+    // line of text when another column wrapped. The editor has to cover the whole cell:
+    // a box that only sat on the first line looked like a floating field with the rest of
+    // the cell showing through underneath it.
+    const cellHeight = this.grid.heightOf(row);
+    // An inline height would beat the stylesheet, so a growing editor sets none and lets
+    // the textarea (which is never shorter than the cell) decide.
+    if (!multiline) wrapper.style.height = cellHeight + 'px';
 
     // A promoted proxy is already focused and already holds what was typed, so it is
     // reused as the editor: moving focus would cancel the composition in progress.
@@ -126,13 +134,13 @@ export class CellEditor {
     wrapper.appendChild(input);
 
     if (multiline) {
-      const grow = () => {
+      grow = () => {
         input.style.height = 'auto';
-        input.style.height = input.scrollHeight + 'px';
+        // Never below the cell it covers: replacing a wrapped value with a short one
+        // would otherwise shrink the box under the pointer while it is being typed in.
+        input.style.height = Math.max(input.scrollHeight, cellHeight) + 'px';
       };
       input.addEventListener('input', grow);
-      // The wrapper is laid out before the text is measured, so grow on the next frame.
-      requestAnimationFrame(grow);
     }
 
     if (column.type === 'Image' || column.type === 'File') {
@@ -154,6 +162,13 @@ export class CellEditor {
 
     this.grid.rows.appendChild(wrapper);
     this.grid.suspendRender = true;
+
+    if (grow) {
+      // Sized before the next paint, so the box never appears at one line and then jumps
+      // to the height of the cell a frame later.
+      grow();
+      requestAnimationFrame(grow);
+    }
 
     input.focus();
     // Put the caret at the end instead of selecting everything: a full selection has no

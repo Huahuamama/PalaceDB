@@ -17,6 +17,9 @@ tests/fixtures/*
 # The release folder is published, not committed. Releases go to GitHub Releases.
 dist/
 
+# Python bytecode from running the E2E script
+__pycache__/
+
 # Editor / agent scratch
 .workbuddy-ai/
 *.user

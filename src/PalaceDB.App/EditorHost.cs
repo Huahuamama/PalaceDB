@@ -85,6 +85,24 @@ public sealed partial class EditorHost
         };
         _watchTimer.Tick += (_, _) => CheckExternalChange();
         _watchTimer.Start();
+
+        // A window that opened this file read-only because another one was editing it has
+        // to hear about it when that window goes away, or it stays read-only for good.
+        OpenFileRegistry.Released += OnWriteSlotReleased;
+    }
+
+    /// <summary>
+    /// Lets go of everything that outlives the window: the write slot, the timers and the
+    /// static registry event. Without this a closed window kept its file held for the
+    /// rest of the process, so any other window showing that file could never edit it.
+    /// </summary>
+    public void Detach()
+    {
+        OpenFileRegistry.Released -= OnWriteSlotReleased;
+        _backupTimer.Stop();
+        _watchTimer.Stop();
+        _document?.Dispose();
+        _document = null;
     }
 
     /// <summary>
@@ -528,14 +546,20 @@ public sealed partial class EditorHost
 
         try
         {
+            DatabaseDocument document;
             // The previous document has to release its write slot first, otherwise
-            // reopening the file this window already holds comes back read-only.
-            _document?.Dispose();
-            _document = null;
-            _pendingMergePath = null;
+            // reopening the file this window already holds comes back read-only. The
+            // release is held back until the new document has asked for the slot again,
+            // so another window cannot slip in and take it in between.
+            using (OpenFileRegistry.DeferNotifications())
+            {
+                _document?.Dispose();
+                _document = null;
+                _pendingMergePath = null;
 
-            var document = OpenWithMerge(path);
-            AdoptDocument(document);
+                document = OpenWithMerge(path);
+                AdoptDocument(document);
+            }
 
             RememberRecent(document.Path);
             SendDocument();
@@ -986,6 +1010,41 @@ public sealed partial class EditorHost
         _currentSheet = null;
         _pendingMergePath = null;
         SendDocument();
+    }
+
+    /// <summary>
+    /// Another window let go of a file's write slot. A window that is read-only only
+    /// because of that other window can take the slot over, which is what the user
+    /// expects after closing the window that had the file open for editing.
+    /// </summary>
+    private void OnWriteSlotReleased(string path)
+    {
+        // The release happens on the closing window's thread; everything below touches
+        // this window's document and its page.
+        if (_window.Dispatcher.CheckAccess())
+            TakeOverWriteSlot(path);
+        else
+            _window.Dispatcher.BeginInvoke(() => TakeOverWriteSlot(path));
+    }
+
+    private void TakeOverWriteSlot(string path)
+    {
+        if (_document is null)
+            return;
+
+        if (!string.Equals(
+                OpenFileRegistry.Normalize(path),
+                OpenFileRegistry.Normalize(_document.Path),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!_document.TryTakeOverWriteSlot())
+            return;
+
+        SendDocument();
+        SendToast("The window that was editing this file is gone, so it can be edited here now.", "info");
     }
 
     /// <summary>Asks the user about unsaved changes. Returns false to cancel the close.</summary>
@@ -3104,6 +3163,9 @@ public sealed partial class EditorHost
             {
                 ["sheet"] = _currentSheet ?? string.Empty,
                 ["cursor"] = CursorToJson(undo ? command.CursorBefore : command.CursorAfter),
+                // The cursor moves back to the change, but the page must not scroll to it:
+                // undo and redo have to leave the view exactly where it is.
+                ["keepView"] = true,
             },
         });
         SendDirty();

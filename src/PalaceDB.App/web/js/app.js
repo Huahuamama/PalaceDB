@@ -172,9 +172,11 @@ function applySettings(next, { persist = true } = {}) {
   }
 
   refreshMetrics();
-  grid.invalidate();
+  // The font size decides the row height, so every measurement taken with the old one is
+  // wrong: this is the one place that has to throw them away.
+  grid.invalidate({ remeasure: true });
   for (const panel of subPanels.values()) {
-    panel.grid.invalidate();
+    panel.grid.invalidate({ remeasure: true });
     panel.measure();
   }
   grid.layoutPanels();
@@ -2758,7 +2760,14 @@ onMessage((message) => {
     case 'invalidate':
       grid.invalidate();
       if (message.payload.cursor && message.payload.cursor.sheet === state.currentSheet) {
-        grid.moveCursor(message.payload.cursor.row, message.payload.cursor.column);
+        // Undo and redo put the cursor back on the change, but the viewport stays where
+        // the user left it: being pulled to another row is what made the table jump.
+        grid.moveCursor(
+          message.payload.cursor.row,
+          message.payload.cursor.column,
+          false,
+          !message.payload.keepView,
+        );
       }
       break;
     case 'cellRejected':

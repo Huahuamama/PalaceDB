@@ -1309,8 +1309,11 @@ textarea.editor-input:not(.editor-multiline) {
      long line never hides its tail off to the right. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.4;
-  padding: 4px 8px;
+  /* The same padding and line height as .cell: a value that wraps over two lines in the
+     cell has to wrap at the same place in the editor, otherwise the box is a different
+     size from the cell it is supposed to be covering. */
+  line-height: 1.25;
+  padding: 2px 10px;
   min-height: var(--row-height);
 }
 

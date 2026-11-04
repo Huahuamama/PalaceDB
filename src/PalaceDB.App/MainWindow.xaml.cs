@@ -285,5 +285,11 @@ public partial class MainWindow : Window
 
         // Remember the geometry only when the window really goes away.
         _host.SaveWindowPlacement();
+
+        // Give the file's write slot back, so another window showing the same database
+        // can stop being read-only. The closing event can fire again for a window that
+        // was cancelled earlier, and Detach is safe to call twice.
+        _host.Detach();
+        _host = null;
     }
 }

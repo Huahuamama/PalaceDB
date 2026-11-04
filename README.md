@@ -164,9 +164,9 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 
 ```bash
 dotnet build
-dotnet test tests/PalaceDB.Core.Tests/PalaceDB.Core.Tests.csproj   # 665 个单元测试
+dotnet test tests/PalaceDB.Core.Tests/PalaceDB.Core.Tests.csproj   # 672 个单元测试
 pip install websocket-client
-python tests/ui/test_ui.py                                        # 端到端，475 项检查
+python tests/ui/test_ui.py                                        # 端到端，489 项检查
 ```
 
 端到端测试会自己起一个真实的窗口，通过 WebView2 的调试协议操作 DOM；跑的时候别去动那个窗口。
@@ -190,7 +190,7 @@ python tests/ui/test_ui.py                                        # 端到端，
 
 这意味着两件事，用之前请先知道：
 
-- **以测试为准，不以"看起来对"为准。** 665 个单元测试 + 475 项端到端检查是功能边界；
+- **以测试为准，不以"看起来对"为准。** 672 个单元测试 + 489 项端到端检查是功能边界；
   测试没覆盖到的地方，行为不保证。
 - **风格不保证统一。** 有些地方会绕、会重复、会有历史包袱（比如同一段列类型判断在前后端各写了一遍）。
   改之前先看 `docs/07-开发者指南-v1.md`，它记录的是"为什么这样做"，比读代码快。

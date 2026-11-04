@@ -61,6 +61,14 @@ public sealed class DatabaseDocument : IDisposable
     /// <summary>Set when this document owns the process-wide write slot for its path.</summary>
     private string? _heldPath;
 
+    /// <summary>
+    /// Set when the only reason this document is read-only is that another window holds
+    /// the write slot. Such a document can become editable later (see
+    /// <see cref="TryTakeOverWriteSlot"/>); one that is read-only because of the metadata
+    /// or the file attributes cannot.
+    /// </summary>
+    private bool _blockedByOtherWindow;
+
     /// <summary>Write time of the file as this window last read or wrote it.</summary>
     private DateTime _stamp;
 
@@ -122,6 +130,7 @@ public sealed class DatabaseDocument : IDisposable
         {
             document.IsReadOnly = true;
             document.ReadOnlyReason = "it is already open in another window";
+            document._blockedByOtherWindow = true;
         }
         else
         {
@@ -168,6 +177,7 @@ public sealed class DatabaseDocument : IDisposable
         {
             document.IsReadOnly = true;
             document.ReadOnlyReason = "it is already open in another window";
+            document._blockedByOtherWindow = true;
         }
         else
         {
@@ -195,6 +205,7 @@ public sealed class DatabaseDocument : IDisposable
         {
             document.IsReadOnly = true;
             document.ReadOnlyReason = "it is already open in another window";
+            document._blockedByOtherWindow = true;
         }
 
         return document;
@@ -358,8 +369,36 @@ public sealed class DatabaseDocument : IDisposable
             _savedCommand = Commands.UndoHistory.Count > 0 ? Commands.UndoHistory[^1] : null;
             IsReadOnly = false;
             ReadOnlyReason = null;
+            _blockedByOtherWindow = false;
             TouchStamp();
             RaiseDirtyIfChanged();
+        }
+    }
+
+    /// <summary>
+    /// Takes the write slot once the window that held it has closed, so a window that
+    /// was opened read-only for that reason becomes editable instead of staying read-only
+    /// for the rest of the session.
+    ///
+    /// Returns false when this document is read-only for another reason (the metadata
+    /// asks for it, or the file itself is read-only), or when another window took the
+    /// slot first.
+    /// </summary>
+    public bool TryTakeOverWriteSlot()
+    {
+        lock (_gate)
+        {
+            if (!_blockedByOtherWindow)
+                return false;
+
+            if (!OpenFileRegistry.TryAcquire(Path))
+                return false;
+
+            _heldPath = Path;
+            _blockedByOtherWindow = false;
+            IsReadOnly = false;
+            ReadOnlyReason = null;
+            return true;
         }
     }
 

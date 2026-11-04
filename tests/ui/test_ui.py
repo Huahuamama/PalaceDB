@@ -1325,6 +1325,11 @@ time.sleep(1.2)
 check("backup removed after saving", wait_for_file(backup_path, 8, False), backup_path)
 
 # --- external modification detection (F15)
+# The reload keeps the scroll position now, so the view is put back on the first row
+# first: the check below reads the value of row 0, which is only in the grid when it is
+# on screen.
+evaluate("__palacedb.grid.moveCursor(0, 0)")
+time.sleep(0.5)
 external = json.load(open(CDB, encoding="utf-8"))
 external["sheets"][0]["lines"][0][ID_NAME] = "EXTERNAL_EDIT"
 with open(CDB, "w", encoding="utf-8", newline="\n") as handle:
@@ -2035,6 +2040,98 @@ if id_name:
     evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
     evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
     time.sleep(0.6)
+
+# --- the in-cell editor is the same size as the cell it covers
+# A row is as tall as its tallest cell, so a Text cell can be several lines tall while
+# holding one line of text. The editor used to sit on the first line only.
+tall_row = evaluate("""(() => {
+  const g = __palacedb.grid;
+  for (let row = 0; row < g.rowCount; row += 1) {
+    if (g.heightOf(row) > 50) return row;
+  }
+  return -1;
+})()""")
+text_col = evaluate("__palacedb.grid.columns.findIndex(c => c.type === 'Text')")
+if tall_row >= 0 and text_col >= 0:
+    evaluate(f"__palacedb.grid.moveCursor({tall_row},{text_col})")
+    evaluate(f"__palacedb.grid.onEditRequest({tall_row},{text_col},'')")
+    ok = wait_for("!!document.querySelector('#gridRows .cell-editor .editor-input')", 5)
+    check("the editor opened on a tall row", ok)
+    geometry = evaluate(f"""(() => {{
+      const cell = document.querySelector('#gridRows .cell[data-row="{tall_row}"][data-col="{text_col}"]');
+      const wrap = document.querySelector('#gridRows .cell-editor');
+      const input = wrap && wrap.querySelector('.editor-input');
+      if (!cell || !wrap || !input) return null;
+      const box = (node) => {{
+        const r = node.getBoundingClientRect();
+        return [Math.round(r.x * 10) / 10, Math.round(r.y * 10) / 10,
+                Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10];
+      }};
+      return {{ cell: box(cell), wrap: box(wrap), input: box(input) }};
+    }})()""")
+    if geometry is None:
+        check("the editor covers the whole cell", False, "no editor in the DOM")
+    else:
+        deltas = [abs(a - b) for a, b in zip(geometry["cell"], geometry["wrap"])]
+        check("the editor covers the whole cell", max(deltas) <= 1.5,
+              (geometry["cell"], geometry["wrap"]))
+        # The field inside the frame fills it, so clicking anywhere in the cell lands in
+        # the text and the caret sits where the value was shown.
+        inner = [abs(geometry["wrap"][2] - geometry["input"][2]),
+                 abs(geometry["wrap"][3] - geometry["input"][3])]
+        check("the field inside the editor fills it", max(inner) <= 1.5,
+              (geometry["wrap"], geometry["input"]))
+    evaluate("document.querySelector('.editor-input').dispatchEvent("
+             "new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))")
+    time.sleep(0.4)
+    check("the editor closed again", wait_for("!document.querySelector('.editor-input')", 5))
+
+# --- saving, undo and redo leave the view exactly where it was
+# Re-sending the document used to throw the measured row heights away, which shortened
+# the scrollable area; the browser then clamped the scroll position upwards.
+SCROLL_PROBE = """(() => { const g = __palacedb.grid; return {
+  top: g.body.scrollTop, content: g.contentHeight() }; })()"""
+evaluate("__palacedb.grid.body.scrollTop = 1200")
+time.sleep(0.6)
+before_scroll = evaluate(SCROLL_PROBE)
+edit_row = evaluate("__palacedb.grid.rowIndexAt(__palacedb.grid.body.scrollTop) + 2")
+evaluate(f"__palacedb.grid.moveCursor({edit_row},{text_col})")
+evaluate(f"__palacedb.grid.onEditRequest({edit_row},{text_col},'')")
+wait_for("!!document.querySelector('.editor-input')", 5)
+evaluate("(() => { const i = document.querySelector('.editor-input'); i.value = 'VIEW_PROBE'; return 1; })()")
+evaluate("(() => { const i = document.querySelector('.editor-input'); "
+         "i.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true})); return 1; })()")
+time.sleep(0.6)
+evaluate("__palacedb.grid.body.scrollTop = 1200")
+time.sleep(0.5)
+before_scroll = evaluate(SCROLL_PROBE)
+
+evaluate("__palacedb.send('save')")
+time.sleep(1.5)
+after_save = evaluate(SCROLL_PROBE)
+check("saving keeps the scroll position",
+      abs(after_save["top"] - before_scroll["top"]) <= 1
+      and abs(after_save["content"] - before_scroll["content"]) <= 1,
+      (before_scroll, after_save))
+
+evaluate("__palacedb.send('undo')")
+time.sleep(1.5)
+after_undo = evaluate(SCROLL_PROBE)
+check("undo keeps the scroll position",
+      abs(after_undo["top"] - before_scroll["top"]) <= 1,
+      (before_scroll, after_undo))
+
+evaluate("__palacedb.send('redo')")
+time.sleep(1.5)
+after_redo = evaluate(SCROLL_PROBE)
+check("redo keeps the scroll position",
+      abs(after_redo["top"] - before_scroll["top"]) <= 1,
+      (before_scroll, after_redo))
+check("the edited value is back after redo",
+      evaluate(f"__palacedb.grid.cellValue({edit_row},{text_col}) && "
+               f"__palacedb.grid.cellValue({edit_row},{text_col}).t") == "VIEW_PROBE")
+evaluate("__palacedb.grid.body.scrollTop = 0")
+time.sleep(0.4)
 
 # --- every column type, on a real file with images and files next to it
 # That sample is not in the repository (it is somebody's real data), so a fresh clone
@@ -3765,6 +3862,72 @@ else:
     check("saved geometry matches the window on screen",
           abs(restored.get("width", 0) - viewport["w"]) < 60,
           (restored.get("width"), viewport))
+
+    # --- two windows on one file: closing the editable one frees the file
+    # The second window opens the same file read-only, because only one window may write.
+    # Once that window is gone the other one has to become editable instead of staying
+    # read-only for the rest of the session.
+    known = {t["id"] for t in json.load(urllib.request.urlopen("http://127.0.0.1:9334/json/list"))}
+    evaluate("__palacedb.send('newWindow')")
+    ws_b = None
+    for _ in range(60):
+        time.sleep(0.5)
+        try:
+            pages = [t for t in json.load(urllib.request.urlopen("http://127.0.0.1:9334/json/list"))
+                     if t.get("type") == "page" and t["id"] not in known]
+        except Exception:
+            pages = []
+        if pages:
+            try:
+                ws_b = websocket.create_connection(pages[0]["webSocketDebuggerUrl"], timeout=15)
+                break
+            except Exception:
+                ws_b = None
+    check("a second window opened", ws_b is not None)
+
+    if ws_b is not None:
+        def wait_b(expr, timeout=25):
+            end = time.time() + timeout
+            while time.time() < end:
+                try:
+                    if evaluate(expr, sock=ws_b):
+                        return True
+                except Exception:
+                    pass
+                time.sleep(0.25)
+            return False
+
+        wait_b("!!window.__palacedb")
+        time.sleep(0.8)
+        evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(RECOVER), sock=ws_b)
+        ok = wait_b("!!(window.__palacedb && __palacedb.state.document)", 25)
+        check("the second window opened the same file", ok)
+        check("the second window is read-only",
+              evaluate("__palacedb.state.document.readOnly", sock=ws_b) is True
+              and evaluate("__palacedb.elements.statusMode.textContent", sock=ws_b) == "Read only",
+              evaluate("__palacedb.elements.statusMode.textContent", sock=ws_b))
+
+        # Close the window that holds the file.
+        evaluate("__palacedb.send('exit')")
+        time.sleep(2.5)
+        ws = ws_b
+        ok = wait_b("__palacedb.state.document.readOnly === false", 20)
+        check("closing the editing window makes the other one editable", ok,
+              evaluate("__palacedb.state.document.readOnlyReason", sock=ws_b))
+        check("the status line says the file can be edited",
+              evaluate("__palacedb.elements.statusMode.textContent", sock=ws_b) == "Editable",
+              evaluate("__palacedb.elements.statusMode.textContent", sock=ws_b))
+        # And it really can write.
+        evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, row: 0, "
+                 "column: __palacedb.grid.columns[0].name, text: 'TAKEN_OVER'})", sock=ws_b)
+        time.sleep(0.5)
+        evaluate("__palacedb.send('save')", sock=ws_b)
+        time.sleep(1.5)
+        check("the promoted window can save",
+              "TAKEN_OVER" in open(RECOVER, encoding="utf-8").read(),
+              evaluate("__palacedb.state.document.dirty", sock=ws_b))
+        evaluate("__palacedb.send('undo')", sock=ws_b)
+        time.sleep(0.6)
 
 # --- no console errors
 ws.close()

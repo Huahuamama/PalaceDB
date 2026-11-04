@@ -215,6 +215,15 @@ export class Grid {
     // document), but not a switch to another one.
     if (this.sheet !== (sheet ? sheet.name : null)) this.clearPanels();
 
+    // The host re-sends the whole document after every save, undo and redo. That is a
+    // refresh of the table already on screen, not a jump to another one, so the view has
+    // to stay exactly where the user left it.
+    const refreshing = this.sheet !== null
+      && this.sheet === (sheet ? sheet.name : null)
+      && this.rowCount === (sheet ? sheet.rowCount : 0);
+    const previousScrollTop = this.body.scrollTop;
+    const previousScrollLeft = this.body.scrollLeft;
+
     // Each table remembers where the cursor was, so switching back feels like a tab.
     if (this.sheet) this.cursors.set(this.sheet, { ...this.cursor });
 
@@ -238,8 +247,13 @@ export class Grid {
 
     this.cache.clear();
     // A different table wraps differently: nothing measured for the old one applies.
-    this.rowHeights.clear();
-    this.heightIndexDirty = true;
+    // A refresh keeps the measurements — dropping them would shrink the scrollable area
+    // (every row above the viewport falls back to the base height) and the browser would
+    // clamp the scroll position, which is the view creeping upwards after a save.
+    if (!refreshing) {
+      this.rowHeights.clear();
+      this.heightIndexDirty = true;
+    }
     this.pendingStart = -1;
     this.pendingCount = 0;
 
@@ -252,11 +266,19 @@ export class Grid {
       : { row: 0, col: 0 };
     this.anchor = { ...this.cursor };
 
-    this.body.scrollTop = 0;
-    this.body.scrollLeft = 0;
+    if (refreshing) {
+      // Restored before the render so the first paint already covers the right rows.
+      this.body.scrollTop = previousScrollTop;
+      this.body.scrollLeft = previousScrollLeft;
+    } else {
+      this.body.scrollTop = 0;
+      this.body.scrollLeft = 0;
+    }
     this.renderHead();
     this.render();
-    if (remembered) this.scrollIntoView();
+    // A refresh leaves the cursor where it was and never scrolls: the user is looking at
+    // something else, and moving the view is exactly what they complained about.
+    if (remembered && !refreshing) this.scrollIntoView();
     this.emitCursor();
   }
 
@@ -571,6 +593,11 @@ export class Grid {
     for (const row of this.rows.children) {
       const index = Number(row.dataset.row);
       if (!Number.isFinite(index)) continue;
+
+      // A row whose values have not arrived yet only shows the "..." placeholder. It
+      // says nothing about how tall the real content is, and measuring it used to forget
+      // the height the row had, which shortened the table under the viewport.
+      if (!this.cache.has(index)) continue;
 
       let needed = ROW_HEIGHT;
 
@@ -1069,7 +1096,11 @@ export class Grid {
     this.onSelectionChanged(bounds);
   }
 
-  moveCursor(row, col, extend = false) {
+  /**
+   * Moves the cursor. `reveal` scrolls the row into view; undo and redo turn it off,
+   * because they move the cursor to the change without taking the viewport along.
+   */
+  moveCursor(row, col, extend = false, reveal = true) {
     if (this.rowCount === 0 || this.columns.length === 0) return;
 
     const nextRow = clamp(row, 0, this.rowCount - 1);
@@ -1081,7 +1112,7 @@ export class Grid {
 
     const scrollTop = this.body.scrollTop;
     const scrollLeft = this.body.scrollLeft;
-    this.scrollIntoView();
+    if (reveal) this.scrollIntoView();
 
     // Only scrolling needs new rows; everything else is a repaint of the ones already
     // on screen, which keeps the element under the pointer alive between mouse events.
@@ -1502,14 +1533,19 @@ export class Grid {
     return column ? column.type : '';
   }
 
-  /** Drops cached rows so the next render refetches them from the host. */
-  invalidate() {
+  /**
+   * Drops cached rows so the next render refetches them from the host.
+   *
+   * `remeasure` throws the measured row heights away as well. Only a font change needs
+   * that: after an edit or an undo the text may be different, but the rows are measured
+   * again as they are painted, while discarding every height above the viewport shortens
+   * the scrollable area and makes the browser clamp the scroll position upwards.
+   */
+  invalidate({ remeasure = false } = {}) {
     this.cache.clear();
     this.pendingStart = -1;
     this.pendingCount = 0;
-    // A reload can change the text, and the font size lives in the same call, so the
-    // measured heights are no longer trustworthy.
-    this.clearRowHeights();
+    if (remeasure) this.clearRowHeights();
     this.scheduleRender();
   }
 }

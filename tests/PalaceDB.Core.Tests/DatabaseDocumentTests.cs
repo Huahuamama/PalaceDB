@@ -317,6 +317,57 @@ public class DatabaseDocumentTests : IDisposable
     }
 
     [Fact]
+    public void AReadOnlyWindowTakesTheWriteSlotOverWhenTheOtherWindowCloses()
+    {
+        var path = WriteSample();
+
+        var first = DatabaseDocument.Open(path);
+        using var second = DatabaseDocument.Open(path);
+        Assert.True(second.IsReadOnly);
+
+        // The window that held the file goes away without the second one being reopened.
+        first.Dispose();
+
+        Assert.True(second.TryTakeOverWriteSlot());
+        Assert.False(second.IsReadOnly);
+        Assert.Null(second.ReadOnlyReason);
+        Assert.True(second.Save());
+    }
+
+    [Fact]
+    public void AWindowReadOnlyForAnotherReasonDoesNotTakeTheSlotOver()
+    {
+        var path = WriteSample();
+        // Metadata written by a newer version is never overwritten, which makes the
+        // document read-only for a reason that closing another window cannot cure.
+        File.WriteAllText(MetaStore.PathFor(path), """{"metaVersion": 99}""");
+
+        using var doc = DatabaseDocument.Open(path);
+        Assert.True(doc.IsReadOnly);
+        Assert.Contains("metadata", doc.ReadOnlyReason);
+
+        Assert.False(doc.TryTakeOverWriteSlot());
+        Assert.True(doc.IsReadOnly);
+    }
+
+    [Fact]
+    public void TakingTheSlotOverFailsWhenAnotherWindowGotThereFirst()
+    {
+        var path = WriteSample();
+
+        var first = DatabaseDocument.Open(path);
+        using var second = DatabaseDocument.Open(path);
+        first.Dispose();
+
+        // A third window opens the file before the read-only one reacts.
+        using var third = DatabaseDocument.Open(path);
+        Assert.False(third.IsReadOnly);
+
+        Assert.False(second.TryTakeOverWriteSlot());
+        Assert.True(second.IsReadOnly);
+    }
+
+    [Fact]
     public void SaveAsMovesTheWriteSlotToTheNewPath()
     {
         var path = WriteSample();
