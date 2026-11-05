@@ -482,6 +482,26 @@ wait_for(f"__palacedb.grid.rowCount > {rows_before2}")
 rows_insert = evaluate("__palacedb.grid.rowCount")
 check("insert paste adds rows", rows_insert > rows_before2, f"{rows_before2} -> {rows_insert}")
 
+# --- insert / delete must not move the view
+# A row operation re-sends the document. Treating the changed row count as "another
+# table" used to reset the scroll to the top and then jump to the cursor.
+evaluate("__palacedb.grid.body.scrollTop = 900")
+time.sleep(0.7)
+scroll_before = evaluate("Math.round(__palacedb.grid.body.scrollTop)")
+edit_row = evaluate("__palacedb.grid.rowIndexAt(__palacedb.grid.body.scrollTop) + 2")
+
+evaluate("__palacedb.send('insertRow', {sheet: __palacedb.state.currentSheet, row: %d})" % edit_row)
+time.sleep(1.1)
+scroll_insert = evaluate("Math.round(__palacedb.grid.body.scrollTop)")
+check("inserting a row keeps the scroll position",
+      abs(scroll_insert - scroll_before) <= 1, (scroll_before, scroll_insert))
+
+evaluate("__palacedb.send('deleteRows', {sheet: __palacedb.state.currentSheet, rows: [%d]})" % edit_row)
+time.sleep(1.1)
+scroll_delete = evaluate("Math.round(__palacedb.grid.body.scrollTop)")
+check("deleting a row keeps the scroll position",
+      abs(scroll_delete - scroll_before) <= 1, (scroll_before, scroll_delete))
+
 # --- a separator is a row index, so inserting above it has to move it
 def current_separators():
     return json.loads(evaluate(

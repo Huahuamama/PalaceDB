@@ -2871,8 +2871,10 @@ function selectSheet(name) {
 
 function showDocument(payload) {
   // Thumbnails are read from disk, so they belong to one file only. The same document is
-  // re-sent after every save, which must not throw the cache away.
-  if (!state.document || state.document.path !== payload.path) clearImages();
+  // re-sent after every save, which must not throw the cache away. A different file is a
+  // new table even when its first sheet has the same name, so the grid must reset.
+  const documentChanged = !state.document || state.document.path !== payload.path;
+  if (documentChanged) clearImages();
 
   state.document = payload;
   state.currentSheet = payload.currentSheet || (payload.sheets[0] ? payload.sheets[0].name : null);
@@ -2896,10 +2898,10 @@ function showDocument(payload) {
   if (sheet) {
     if (previousSheet && previousSheet !== sheet.name) closeAllPanels();
     state.currentSheet = sheet.name;
-    grid.setSheet(sheet);
+    grid.setSheet(sheet, { resetView: documentChanged });
   } else {
     closeAllPanels();
-    grid.setSheet(null);
+    grid.setSheet(null, { resetView: documentChanged });
   }
 
   // A brand new database has no table yet; the grid area explains what to do next.

@@ -213,18 +213,26 @@ export class Grid {
     if (document.activeElement !== this.proxy) this.proxy.focus({ preventScroll: true });
   }
 
-  /** Loads a sheet description (columns and row count) and resets the view. */
-  setSheet(sheet) {
+  /**
+   * Loads a sheet description (columns and row count).
+   * `resetView` forces a fresh table even when the name matches — opening another
+   * document whose first table happens to share this name must not keep the old scroll
+   * position or the old row measurements.
+   */
+  setSheet(sheet, { resetView = false } = {}) {
     // An open sub-table survives a refresh of the same table (an edit re-sends the
     // document), but not a switch to another one.
     if (this.sheet !== (sheet ? sheet.name : null)) this.clearPanels();
 
-    // The host re-sends the whole document after every save, undo and redo. That is a
-    // refresh of the table already on screen, not a jump to another one, so the view has
-    // to stay exactly where the user left it.
-    const refreshing = this.sheet !== null
-      && this.sheet === (sheet ? sheet.name : null)
-      && this.rowCount === (sheet ? sheet.rowCount : 0);
+    // The host re-sends the whole document after every save, undo and redo — and after a
+    // row insert or delete, where the row count changes but the table is the same. All of
+    // those are refreshes of the table already on screen, so the view has to stay exactly
+    // where the user left it. Requiring an unchanged row count here made a row operation
+    // look like a switch to another table: scroll reset to 0 and then jumped to the
+    // remembered cursor.
+    const sameSheet = !resetView
+      && this.sheet !== null
+      && this.sheet === (sheet ? sheet.name : null);
     const previousScrollTop = this.body.scrollTop;
     const previousScrollLeft = this.body.scrollLeft;
 
@@ -254,7 +262,7 @@ export class Grid {
     // A refresh keeps the measurements — dropping them would shrink the scrollable area
     // (every row above the viewport falls back to the base height) and the browser would
     // clamp the scroll position, which is the view creeping upwards after a save.
-    if (!refreshing) {
+    if (!sameSheet) {
       this.rowHeights.clear();
       this.heightIndexDirty = true;
     }
@@ -270,7 +278,7 @@ export class Grid {
       : { row: 0, col: 0 };
     this.anchor = { ...this.cursor };
 
-    if (refreshing) {
+    if (sameSheet) {
       // Restored before the render so the first paint already covers the right rows.
       this.body.scrollTop = previousScrollTop;
       this.body.scrollLeft = previousScrollLeft;
@@ -282,7 +290,7 @@ export class Grid {
     this.render();
     // A refresh leaves the cursor where it was and never scrolls: the user is looking at
     // something else, and moving the view is exactly what they complained about.
-    if (remembered && !refreshing) this.scrollIntoView();
+    if (remembered && !sameSheet) this.scrollIntoView();
     this.emitCursor();
   }
 
