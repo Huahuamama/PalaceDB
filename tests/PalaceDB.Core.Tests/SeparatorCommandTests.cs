@@ -150,6 +150,136 @@ public class SeparatorCommandTests
         Assert.Contains("\"separators\"", PalaceDB.Core.Json.CdbWriter.Write(db));
     }
 
+    // ---------------------------------------------------------------- row inserts
+
+    [Fact]
+    public void InsertingRowsAboveASeparatorMovesItDown()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+
+        new RowInsertCommand(sheet, 0, new[] { new CdbObject() }).Execute();
+
+        Assert.Equal(new[] { 2 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void InsertingRowsAtTheSeparatorKeepsItAboveTheNewRows()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+
+        new RowInsertCommand(sheet, 1, new[] { new CdbObject(), new CdbObject() }).Execute();
+
+        // The new rows belong to the section the heading introduces, so the heading stays.
+        Assert.Equal(new[] { 1 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void InsertingRowsBelowASeparatorLeavesItAlone()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+
+        new RowInsertCommand(sheet, 2, new[] { new CdbObject() }).Execute();
+
+        Assert.Equal(new[] { 1 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void InsertUndoRestoresTheSeparatorIndex()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+
+        var command = new RowInsertCommand(sheet, 0, new[] { new CdbObject() });
+        command.Execute();
+        command.Undo();
+
+        Assert.Equal(new[] { 1 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void ATitleMovesWithItsSeparator()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 2).Execute();
+        new SeparatorTitleCommand(sheet, 2, "Group").Execute();
+
+        new RowInsertCommand(sheet, 0, new[] { new CdbObject() }).Execute();
+
+        var pairs = sheet.GetSeparators();
+        Assert.Single(pairs);
+        Assert.Equal(3, pairs[0].Index);
+        Assert.Equal("Group", pairs[0].Title);
+    }
+
+    // ---------------------------------------------------------------- row deletes
+
+    [Fact]
+    public void DeletingRowsAboveASeparatorMovesItUp()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 2).Execute();
+
+        new RowDeleteCommand(sheet, 0, 1).Execute();
+
+        Assert.Equal(new[] { 1 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void DeletingTheRowUnderASeparatorKeepsTheHeadingAboveTheNextRow()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+
+        new RowDeleteCommand(sheet, 1, 1).Execute();
+
+        Assert.Equal(new[] { 1 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void DeletingTheLastRowDoesNotLeaveATrailingSeparator()
+    {
+        var (db, sheet) = Sample();
+        var last = sheet.Lines.Count - 1;
+        new SeparatorToggleCommand(sheet, last).Execute();
+
+        new RowDeleteCommand(sheet, last, 1).Execute();
+
+        Assert.Empty(sheet.Separators);
+    }
+
+    [Fact]
+    public void DeleteUndoRestoresTheSeparators()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 2).Execute();
+        new SeparatorTitleCommand(sheet, 2, "Group").Execute();
+
+        var command = new RowDeleteCommand(sheet, 0, 1);
+        command.Execute();
+        command.Undo();
+
+        var pairs = sheet.GetSeparators();
+        Assert.Single(pairs);
+        Assert.Equal(2, pairs[0].Index);
+        Assert.Equal("Group", pairs[0].Title);
+    }
+
+    [Fact]
+    public void TwoHeadingsThatCollideAfterADeleteBecomeOne()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+        new SeparatorToggleCommand(sheet, 2).Execute();
+
+        // Row 1 goes away: the heading on it stays, the one on row 2 moves onto it too.
+        new RowDeleteCommand(sheet, 1, 1).Execute();
+
+        Assert.Equal(new[] { 1 }, sheet.Separators);
+    }
+
     private static string[] Titles(SheetData sheet) =>
         sheet.GetSeparators().Select(p => p.Title ?? string.Empty).ToArray();
 }

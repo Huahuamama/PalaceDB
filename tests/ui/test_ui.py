@@ -439,6 +439,9 @@ time.sleep(0.8)
 wait_for("__palacedb.grid.cellValue(%d,1) !== undefined" % target_row)
 pasted = evaluate("__palacedb.grid.cellValue(%d,1).t" % target_row)
 check("paste overwrote the target block", pasted == src, f"{src!r} -> {pasted!r}")
+check("paste keeps the cursor on the pasted cell",
+      evaluate("__palacedb.grid.cursor.row === %d && __palacedb.grid.cursor.col === 1" % target_row),
+      evaluate("JSON.stringify(__palacedb.grid.cursor)"))
 
 # --- undo the paste
 evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true}))")
@@ -479,6 +482,25 @@ wait_for(f"__palacedb.grid.rowCount > {rows_before2}")
 rows_insert = evaluate("__palacedb.grid.rowCount")
 check("insert paste adds rows", rows_insert > rows_before2, f"{rows_before2} -> {rows_insert}")
 
+# --- a separator is a row index, so inserting above it has to move it
+def current_separators():
+    return json.loads(evaluate(
+        "JSON.stringify((__palacedb.state.document.sheets.find("
+        "s => s.name === __palacedb.state.currentSheet) || {}).separators || [])"))
+
+
+sep_indices = current_separators()
+insert_at = 1
+evaluate("__palacedb.send('insertRow', {sheet: __palacedb.state.currentSheet, row: %d})" % insert_at)
+time.sleep(1.0)
+shifted = [s + 1 if s > insert_at else s for s in sep_indices]
+check("inserting rows shifts the separators below them",
+      current_separators() == shifted, (sep_indices, current_separators()))
+
+evaluate("__palacedb.send('undo')")
+time.sleep(1.0)
+check("undo restores the separator indices", current_separators() == sep_indices,
+      (sep_indices, current_separators()))
 
 # --- column width is stored in the metadata side-car
 evaluate("__palacedb.grid.columns[1].width = 210; __palacedb.grid.onColumnResized(__palacedb.grid.sheet, __palacedb.grid.columns[1].name, 210)")
@@ -516,6 +538,161 @@ evaluate("__palacedb.grid.moveCursor(6,6)")
 time.sleep(0.5)
 bg2 = evaluate("(()=>{const c=document.querySelector('.cell[data-row=\"0\"][data-col=\"1\"]');return c?c.style.backgroundColor:null})()")
 check("colour cleared", bg2 in (None, "", "rgba(0, 0, 0, 0)"), bg2)
+
+# --- a row colour must survive an edit
+# The single-row refresh sent after an edit used to rebuild the row without its `bg`,
+# so a coloured row lost its fill the moment any cell in it changed and only got it back
+# after switching tables (which re-fetches the row with its style).
+evaluate("document.getElementById('fillScope').value = 'row'")
+evaluate("__palacedb.grid.moveCursor(0,0)")
+evaluate("__palacedb.run('applyFill')")
+time.sleep(0.9)
+wait_for("__palacedb.grid.cellValue(0,1) !== undefined")
+row_bg_before = evaluate("(()=>{const c=document.querySelector('.cell[data-row=\"0\"][data-col=\"1\"]');return c?c.style.backgroundColor:null})()")
+check("row background rendered", row_bg_before not in (None, "", "rgba(0, 0, 0, 0)"), row_bg_before)
+
+evaluate("__palacedb.grid.moveCursor(0,1)")
+evaluate("__palacedb.grid.onEditRequest(0,1,'')")
+wait_for("!!document.querySelector('.editor-input')", 5)
+evaluate("""(() => {
+  const i = document.querySelector('.editor-input');
+  i.value = 'ROW_BG_EDIT';
+  i.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+  return true;
+})()""")
+time.sleep(0.9)
+wait_for("!document.querySelector('.editor-input')", 5)
+row_bg_after = evaluate("(()=>{const c=document.querySelector('.cell[data-row=\"0\"][data-col=\"1\"]');return c?c.style.backgroundColor:null})()")
+check("row background survives an edit", row_bg_after not in (None, "", "rgba(0, 0, 0, 0)"), row_bg_after)
+
+# Restore the scope so the checks that follow behave as before.
+evaluate("document.getElementById('fillScope').value = 'cell'")
+evaluate("__palacedb.grid.moveCursor(0,0)")
+evaluate("__palacedb.run('clearFill')")
+time.sleep(0.6)
+
+# --- find / replace
+# The fixture has been edited above, so this block writes its own markers first: these
+# checks are about the find bar, not about the sample's original text.
+
+def select_sheet(name):
+    evaluate("document.querySelector('.table-item[data-sheet=%s]').click()" % json.dumps(name))
+    wait_for("__palacedb.state.currentSheet === %s" % json.dumps(name), 8)
+    time.sleep(0.4)
+
+
+def write_cell(row, col, text):
+    column = evaluate("__palacedb.grid.columns[%d].name" % col)
+    evaluate("__palacedb.send('setCell', {sheet: %s, row: %d, column: %s, text: %s})"
+             % (json.dumps(evaluate("__palacedb.state.currentSheet")), row,
+                json.dumps(column), json.dumps(text)))
+    time.sleep(0.5)
+
+
+def find(text, scope="table", regex=False, replacement=None):
+    evaluate("""(() => {
+      __palacedb.openFindBar(%s);
+      const scope = document.getElementById('findScope');
+      scope.value = %s;
+      scope.dispatchEvent(new Event('change', {bubbles: true}));
+      const rx = document.getElementById('findRegex');
+      rx.checked = %s;
+      rx.dispatchEvent(new Event('change', {bubbles: true}));
+      const input = document.getElementById('findInput');
+      input.value = %s;
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      if (%s) document.getElementById('replaceInput').value = %s;
+      return true;
+    })()""" % ("true" if replacement is not None else "false", json.dumps(scope),
+              "true" if regex else "false", json.dumps(text),
+              "true" if replacement is not None else "false", json.dumps(replacement or "")))
+    time.sleep(0.9)
+
+
+select_sheet("EventCard")
+evaluate("__palacedb.grid.moveCursor(0,0)")
+write_cell(0, 1, "ZZSEARCHA one")
+write_cell(1, 1, "ZZSEARCHA two")
+select_sheet("Item")
+write_cell(0, 1, "ZZSEARCHA three")
+select_sheet("EventCard")
+evaluate("__palacedb.grid.moveCursor(0,0)")
+time.sleep(0.3)
+
+find("ZZSEARCHA", "table")
+wait_for("__palacedb.searchState.matches.length === 2", 8)
+check("find: the table scope finds both cells",
+      evaluate("__palacedb.searchState.matches.length") == 2,
+      evaluate("__palacedb.searchState.matches.length"))
+check("find: hits are painted on the grid", evaluate("__palacedb.grid.searchHits.size") == 2,
+      evaluate("__palacedb.grid.searchHits.size"))
+
+evaluate("__palacedb.stepMatch(1)")
+time.sleep(0.4)
+check("find: next moves to the second hit", evaluate("__palacedb.grid.cursor.row") == 1,
+      evaluate("JSON.stringify(__palacedb.grid.cursor)"))
+
+find("ZZSEARCHA", "document")
+wait_for("__palacedb.searchState.matches.length === 3", 8)
+check("find: the whole file finds the other table",
+      evaluate("__palacedb.searchState.matches.length") == 3,
+      evaluate("__palacedb.searchState.matches.length"))
+
+for _ in range(6):
+    if evaluate("__palacedb.state.currentSheet") == "Item":
+        break
+    evaluate("__palacedb.stepMatch(1)")
+    time.sleep(0.35)
+check("find: next crosses into the other table",
+      evaluate("__palacedb.state.currentSheet") == "Item",
+      evaluate("__palacedb.state.currentSheet"))
+
+select_sheet("EventCard")
+evaluate("__palacedb.grid.moveCursor(0,0)")
+find(r"ZZSEARCH\w+", "table", True)
+wait_for("__palacedb.searchState.matches.length >= 2", 8)
+check("find: a regular expression matches the cells",
+      evaluate("__palacedb.searchState.matches.length") >= 2,
+      evaluate("__palacedb.searchState.matches.length"))
+
+find("zzsearcha", "table")
+wait_for("__palacedb.searchState.matches.length === 2", 8)
+evaluate("document.getElementById('findCase').checked = true;"
+         "document.getElementById('findCase').dispatchEvent(new Event('change',{bubbles:true}))")
+time.sleep(0.8)
+check("find: match case is honoured", evaluate("__palacedb.searchState.matches.length") == 0,
+      evaluate("__palacedb.searchState.matches.length"))
+evaluate("document.getElementById('findCase').checked = false;"
+         "document.getElementById('findCase').dispatchEvent(new Event('change',{bubbles:true}))")
+time.sleep(0.6)
+
+evaluate("__palacedb.grid.moveCursor(0,0)")
+find("ZZSEARCHA", "table", False, "ZZREPLACED")
+wait_for("__palacedb.searchState.matches.length === 2", 8)
+evaluate("__palacedb.replaceCurrent()")
+time.sleep(1.0)
+first_text = evaluate("__palacedb.grid.cellValue(0,1) && __palacedb.grid.cellValue(0,1).t") or ""
+check("replace: one cell changes", "ZZREPLACED" in first_text, first_text)
+check("replace: the other hit remains", evaluate("__palacedb.searchState.matches.length") == 1,
+      evaluate("__palacedb.searchState.matches.length"))
+
+find("ZZSEARCHA", "table", False, "ZZDONE")
+wait_for("__palacedb.searchState.matches.length === 1", 8)
+evaluate("__palacedb.replaceAllInScope()")
+wait_for("__palacedb.searchState.matches.length === 0", 8)
+check("replace all: no hits are left", evaluate("__palacedb.searchState.matches.length") == 0,
+      evaluate("__palacedb.searchState.matches.length"))
+second_text = evaluate("__palacedb.grid.cellValue(1,1) && __palacedb.grid.cellValue(1,1).t") or ""
+check("replace all: the remaining cell changed", "ZZDONE" in second_text, second_text)
+
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true}))")
+time.sleep(1.0)
+restored = evaluate("__palacedb.grid.cellValue(1,1) && __palacedb.grid.cellValue(1,1).t") or ""
+check("replace all: undo restores the cells", "ZZSEARCHA" in restored, restored)
+
+evaluate("__palacedb.closeFindBar()")
+time.sleep(0.3)
+check("find: the bar closes", evaluate("document.getElementById('findBar').hidden") is True)
 
 # --- save
 evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true}))")
@@ -589,15 +766,18 @@ check("table edits undone", ok)
 check("document clean after undo", wait_for("__palacedb.state.document.dirty === false", 6))
 
 # --- separators
-# Samples differ here: one of them already carries a separator above row 3. The row is
-# cleared first so the checks below start from a known state (and so the group test further
-# down can build its own titled separator on the same row).
-if evaluate("__palacedb.grid.separatorTitles.has(2)"):
-    evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 2})")
-    ok = wait_for("!__palacedb.grid.separatorTitles.has(2)")
-    time.sleep(0.6)
-    check("the sample's own separator on row 3 is cleared for the test", ok,
-          evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"))
+# The sample carries its own dividers, and the row edits above moved them with their rows
+# (that is the behaviour under test). The section starts from a clean slate so its geometry
+# and group checks do not trip over an unrelated divider: every existing separator is
+# removed. Those commands stay on the stack, and the save further down clears the dirty flag.
+existing_separators = json.loads(evaluate(
+    "JSON.stringify(Array.from(__palacedb.grid.separatorTitles.keys()))"))
+for row in existing_separators:
+    evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: %d})" % row)
+    wait_for("!__palacedb.grid.separatorTitles.has(%d)" % row, 5)
+ok = wait_for("__palacedb.grid.separatorTitles.size === 0")
+check("the sample's own separators are cleared for the test", ok,
+      evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"))
 
 sep_before = evaluate("__palacedb.grid.separatorTitles.size")
 evaluate("__palacedb.grid.moveCursor(2,0)")
@@ -1071,6 +1251,32 @@ check("the choice is stored for the next start",
       stored_json.get("gridFontSize") == 16 and stored_json.get("scheme") == "graphite",
       stored)
 
+# The dialog previews a palette live, which used to leave the side-car on the old one:
+# OK only compared state.settings with itself and never wrote the file. The next document
+# refresh (insert row, column options, ...) then flipped the window back.
+meta_after_settings = {}
+if os.path.exists(CDB + ".meta.json"):
+    meta_after_settings = json.load(open(CDB + ".meta.json", encoding="utf-8"))
+check("Done writes the palette to the file's side-car",
+      (meta_after_settings.get("appearance") or {}).get("scheme") == "graphite",
+      meta_after_settings.get("appearance"))
+
+rows_before_theme = evaluate("__palacedb.grid.rowCount")
+evaluate("__palacedb.send('insertRow', {sheet: __palacedb.state.currentSheet, row: %d})" % rows_before_theme)
+time.sleep(1.0)
+check("a document refresh keeps the chosen palette",
+      evaluate("document.body.dataset.scheme") == "graphite"
+      and evaluate("__palacedb.state.settings.scheme") == "graphite",
+      evaluate("document.body.dataset.scheme"))
+evaluate("__palacedb.send('undo')")
+time.sleep(1.0)
+# Appending a row scrolls to it; put the view back at the top so the next block (which
+# inspects rows 2 and 3) has them rendered. moveCursor alone is not enough: it returns
+# early when the cursor is already on (0,0) and then never scrolls.
+evaluate("__palacedb.grid.moveCursor(0,0)")
+evaluate("__palacedb.grid.body.scrollTop = 0; __palacedb.grid.body.scrollLeft = 0")
+time.sleep(0.5)
+
 # --- restoring the defaults is one button
 evaluate("__palacedb.openSettings()")
 time.sleep(0.5)
@@ -1155,43 +1361,51 @@ check("the row-number column is about half as wide as before",
 check("a row number too long for it is clipped, not widened",
       gutter and gutter["clips"] is True, gutter)
 
-# --- one sidebar toggle, in one place, the same size and style in both states
+# --- one sidebar toggle, pinned at the far left: the exact same screen box in both states
 toggle = evaluate("""(() => {
-  const buttons = [...document.querySelectorAll(
-    '.toolbar [data-action="toggleSidebar"], .sidebar-header [data-action="toggleSidebar"], .sidebar-header #sidebarToggle')];
   const button = document.getElementById('sidebarExpand');
-  const bar = () => button.closest('.toolbar').getBoundingClientRect();
-  const offset = (box) => Math.round(box.left - bar().left);
-  const before = button.getBoundingClientRect();
-  const beforeOffset = offset(before);
+  // The View menu entry shares data-action but is a menu command, not a second
+  // on-screen toggle. Only the pinned button counts as a visible control.
+  const controls = [...document.querySelectorAll(
+    'button[data-action="toggleSidebar"]:not(.menu-item)')];
+  const box = () => {
+    const r = button.getBoundingClientRect();
+    return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+  };
+  const label = document.querySelector('.sidebar-title');
+  const before = box();
+  // The control sits to the left of the TABLES label, and belongs to neither the
+  // sidebar nor the toolbar: both of those change width when the list is hidden.
+  const leftOfTables = !!label && button.getBoundingClientRect().right
+    <= label.getBoundingClientRect().left;
+  const inToolbar = !!button.closest('.toolbar');
+  const inSidebar = !!button.closest('.sidebar');
   button.click();
-  const collapsedBox = button.getBoundingClientRect();
-  const collapsedOffset = offset(collapsedBox);
+  const collapsedBox = box();
   const collapsed = document.getElementById('sidebar').classList.contains('collapsed');
+  const stillVisible = getComputedStyle(button).display !== 'none'
+    && button.getBoundingClientRect().width > 0;
   button.click();
-  const backBox = button.getBoundingClientRect();
+  const backBox = box();
+  const key = (b) => b.join(',');
   return {
-    controls: buttons.length,
-    inToolbar: !!button.closest('.toolbar'),
-    inSidebarHeader: !!document.querySelector('.sidebar-header #sidebarToggle'),
-    collapsed,
-    expandedAgain: !document.getElementById('sidebar').classList.contains('collapsed'),
-    // Size is absolute, position is measured from the left edge of the toolbar: the
-    // toolbar itself moves left when the table list goes away, the button must not
-    // move inside it.
-    sameSize: Math.round(before.width) === Math.round(collapsedBox.width)
-      && Math.round(before.height) === Math.round(collapsedBox.height),
-    sameOffset: beforeOffset === collapsedOffset && collapsedOffset === offset(backBox),
-    style: getComputedStyle(button).borderRadius,
+    controls: controls.length, inToolbar, inSidebar, leftOfTables,
+    collapsed, expandedAgain: !document.getElementById('sidebar').classList.contains('collapsed'),
+    stillVisible,
+    // Absolute viewport coordinates: the whole point is that the pointer never has to
+    // move, not merely that the button keeps its offset inside a moving container.
+    sameBox: key(before) === key(collapsedBox) && key(collapsedBox) === key(backBox),
+    boxes: [before, collapsedBox, backBox],
   };
 })()""")
 check("the table list has a single toggle control",
-      toggle and toggle["controls"] == 1 and toggle["inToolbar"] is True
-      and toggle["inSidebarHeader"] is False, toggle)
+      toggle and toggle["controls"] == 1 and toggle["inToolbar"] is False
+      and toggle["inSidebar"] is False and toggle["leftOfTables"] is True, toggle)
 check("the same button collapses and restores the list",
-      toggle and toggle["collapsed"] is True and toggle["expandedAgain"] is True, toggle)
-check("the button keeps its position and size in both states",
-      toggle and toggle["sameSize"] is True and toggle["sameOffset"] is True, toggle)
+      toggle and toggle["collapsed"] is True and toggle["expandedAgain"] is True
+      and toggle["stillVisible"] is True, toggle)
+check("the button keeps its exact screen position in both states",
+      toggle and toggle["sameBox"] is True, toggle)
 
 # --- Tab toggles the table list outside the table
 evaluate("document.getElementById('sidebarExpand').focus()")
@@ -1776,13 +1990,19 @@ ok = wait_for("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d
 check("pasted block undone in one step", ok,
       evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL, TSV_COL)))
 
-# A single cell pasted into a data column.
+# A single value pasted into a cell through the real Ctrl+V path. The cursor must stay
+# on that cell: refreshing with column 0 used to throw it back to the row's first cell.
 set_clipboard("only-one-cell")
-evaluate("__palacedb.send('pasteCells', {sheet: __palacedb.state.currentSheet, row: 0, column: %d, mode: 'overwrite'})" % TSV_COL)
+evaluate("__palacedb.grid.moveCursor(0, %d)" % TSV_COL)
+time.sleep(0.2)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'v',ctrlKey:true,bubbles:true}))")
 time.sleep(0.6)
 check("single cell paste still works",
       evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL, TSV_COL)) == "only-one-cell",
       evaluate("__palacedb.grid.cellValue(0,%d) && __palacedb.grid.cellValue(0,%d).t" % (TSV_COL, TSV_COL)))
+check("a single pasted value keeps the cursor on its cell",
+      evaluate("__palacedb.grid.cursor.row === 0 && __palacedb.grid.cursor.col === %d" % TSV_COL),
+      evaluate("JSON.stringify(__palacedb.grid.cursor)"))
 evaluate("__palacedb.send('undo')")
 
 # Pasting while the cursor sits on the identifier column writes identifiers.
@@ -1993,16 +2213,23 @@ evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'b', ctr
 time.sleep(0.5)
 collapsed = evaluate("""(() => {
   const side = document.getElementById('sidebar');
-  const expand = document.getElementById('sidebarExpand');
+  const toggle = document.getElementById('sidebarExpand');
+  const firstTool = document.querySelector('#toolbar .tool');
   return {
     display: getComputedStyle(side).display,
     width: side.getBoundingClientRect().width,
-    expandVisible: expand.getBoundingClientRect().width > 0,
+    toggleVisible: toggle.getBoundingClientRect().width > 0,
+    // The toolbar now starts at the window edge, so its own buttons must not sit
+    // underneath the pinned toggle.
+    toolbarClearsToggle: !firstTool ||
+      firstTool.getBoundingClientRect().left >= toggle.getBoundingClientRect().right,
   };
 })()""")
 check("a collapsed table list takes no space",
       collapsed and collapsed["display"] == "none" and collapsed["width"] == 0, collapsed)
-check("the toolbar offers a way back", collapsed and collapsed["expandVisible"] is True, collapsed)
+check("the pinned toggle stays visible and the toolbar leaves room for it",
+      collapsed and collapsed["toggleVisible"] is True
+      and collapsed["toolbarClearsToggle"] is True, collapsed)
 
 evaluate("document.getElementById('sidebarExpand').click()")
 time.sleep(0.5)
@@ -2010,7 +2237,7 @@ restored_side = evaluate("""(() => {
   const side = document.getElementById('sidebar');
   return {display: getComputedStyle(side).display, width: side.getBoundingClientRect().width};
 })()""")
-check("the toolbar button brings the table list back",
+check("the pinned toggle brings the table list back",
       restored_side and restored_side["display"] != "none" and restored_side["width"] > 100,
       restored_side)
 

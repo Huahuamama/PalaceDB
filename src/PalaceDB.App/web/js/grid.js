@@ -90,6 +90,10 @@ export class Grid {
     this.columns = [];
     this.rowCount = 0;
     this.cache = new Map();
+    // Search hits for the table on screen, keyed "row:col". Kept here so every render
+    // (a scroll, an edit, a sheet refresh) repaints them; the find bar owns the values.
+    this.searchHits = new Set();
+    this.searchCurrent = null;
     this.separatorTitles = new Map();
     // The same separators as a sorted list: a strip is one row tall, so everything below
     // it has to move down by one row per separator above it.
@@ -297,6 +301,16 @@ export class Grid {
     let left = 0;
     for (let i = 0; i < col && i < this.columns.length; i += 1) left += this.columns[i].width;
     return left;
+  }
+
+  /**
+   * Sets the highlighted cells of the table on screen. `hits` holds "row:col" keys and
+   * `current` is the one the cursor is on, or null.
+   */
+  setSearchHits(hits, current) {
+    this.searchHits = hits instanceof Set ? hits : new Set(hits || []);
+    this.searchCurrent = current || null;
+    this.render();
   }
 
   /** Replaces a single cached row (used after an edit). */
@@ -879,6 +893,14 @@ export class Grid {
       cell.dataset.col = String(colIndex);
       cell.dataset.row = String(index);
 
+      // Find hits are painted as an extra layer, not as the cell's background, so a
+      // coloured cell keeps its fill while it is highlighted.
+      const hitKey = index + ':' + colIndex;
+      if (this.searchHits.has(hitKey)) {
+        cell.classList.add('search-hit');
+        if (hitKey === this.searchCurrent) cell.classList.add('search-current');
+      }
+
       const value = data ? data.cells[colIndex] : null;
 
       // An open sub-table replaces the value it belongs to: the cell shows a marker
@@ -1099,8 +1121,10 @@ export class Grid {
   /**
    * Moves the cursor. `reveal` scrolls the row into view; undo and redo turn it off,
    * because they move the cursor to the change without taking the viewport along.
+   * `focus` keeps the keyboard where it is — find/replace steps the cursor while the
+   * user is still typing in the find field, which must not lose focus.
    */
-  moveCursor(row, col, extend = false, reveal = true) {
+  moveCursor(row, col, extend = false, reveal = true, focus = true) {
     if (this.rowCount === 0 || this.columns.length === 0) return;
 
     const nextRow = clamp(row, 0, this.rowCount - 1);
@@ -1122,7 +1146,7 @@ export class Grid {
       this.paintSelection();
     }
 
-    if (!this.isEditing()) this.focusProxy();
+    if (focus && !this.isEditing()) this.focusProxy();
     this.emitCursor();
   }
 

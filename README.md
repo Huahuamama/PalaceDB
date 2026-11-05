@@ -17,6 +17,7 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 - 打开一个 `.cdb`，左侧列出所有表，右侧是表格，单元格按类型给不同的编辑控件。
 - 增删改行、列、表；拖动行号排序；行内可以插分隔线和命名分组。
 - 列可以引用另一张表（下拉选择），可以是 List / Properties（单击单元格在行下方展开二级表格）。
+- 查找 / 替换（`Ctrl+F` / `Ctrl+H`）：范围可选当前表或整个文件，支持正则，替换整批算一步撤销。
 - 撤销 / 重做；多窗口打开同一个文件时第二个窗口只读。
 - 5 分钟自动备份，崩溃或断电后可以恢复。
 - 列宽、行底色、窗口位置、模板定义这些**展示状态**存在旁边的 `X.cdb.meta.json`，不写进数据文件。
@@ -123,6 +124,7 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | 复制 / 剪切 / 粘贴单元格（粘贴默认覆盖，`Ctrl+Shift+V` 是插入） |
 | `Ctrl+A` | 全选当前表 |
+| `Ctrl+F` / `Ctrl+H` | 查找 / 查找并替换（当前表或全文件，支持正则） |
 | `Ctrl+Enter` | 把当前编辑的值填满选区 |
 | `Tab` / `Ctrl+B` | 收起 / 展开表列表 |
 | `Ctrl+T` | 深色 / 浅色 |
@@ -164,9 +166,9 @@ PalaceDB 是一个 Windows 上的表格编辑器，用来读写游戏数据文�
 
 ```bash
 dotnet build
-dotnet test tests/PalaceDB.Core.Tests/PalaceDB.Core.Tests.csproj   # 672 个单元测试
+dotnet test tests/PalaceDB.Core.Tests/PalaceDB.Core.Tests.csproj   # 696 个单元测试
 pip install websocket-client
-python tests/ui/test_ui.py                                        # 端到端，489 项检查
+python tests/ui/test_ui.py                                        # 端到端，511 项检查
 ```
 
 端到端测试会自己起一个真实的窗口，通过 WebView2 的调试协议操作 DOM；跑的时候别去动那个窗口。
@@ -190,7 +192,7 @@ python tests/ui/test_ui.py                                        # 端到端，
 
 这意味着两件事，用之前请先知道：
 
-- **以测试为准，不以"看起来对"为准。** 672 个单元测试 + 489 项端到端检查是功能边界；
+- **以测试为准，不以"看起来对"为准。** 696 个单元测试 + 511 项端到端检查是功能边界；
   测试没覆盖到的地方，行为不保证。
 - **风格不保证统一。** 有些地方会绕、会重复、会有历史包袱（比如同一段列类型判断在前后端各写了一遍）。
   改之前先看 `docs/07-开发者指南-v1.md`，它记录的是"为什么这样做"，比读代码快。

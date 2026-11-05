@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using System.Windows;
 using PalaceDB.Core.Commands;
@@ -250,6 +251,18 @@ public sealed partial class EditorHost
 
             case "pasteCells":
                 PasteCells(payload);
+                break;
+
+            case "search":
+                SearchCells(payload);
+                break;
+
+            case "replaceOne":
+                ReplaceOne(payload);
+                break;
+
+            case "replaceAll":
+                ReplaceAllCells(payload);
                 break;
 
             case "insertRow":
@@ -1311,6 +1324,292 @@ public sealed partial class EditorHost
         SendDirty();
     }
 
+    /// <summary>Runs a find query and sends the hits back to the find bar.</summary>
+    private void SearchCells(JsonElement payload)
+    {
+        if (_document is null)
+            return;
+
+        var query = ReadSearchQuery(payload);
+        if (query is null)
+        {
+            SendSearchResults(null, Array.Empty<SearchMatch>(), false);
+            return;
+        }
+
+        try
+        {
+            var result = SearchEngine.Search(_document.Database, query);
+            SendSearchResults(query, result.Matches, result.Truncated);
+        }
+        catch (ArgumentException ex)
+        {
+            SendError("Invalid regular expression: " + ex.Message);
+            SendSearchResults(query, Array.Empty<SearchMatch>(), false);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            SendError("The regular expression took too long to run.");
+            SendSearchResults(query, Array.Empty<SearchMatch>(), false);
+        }
+    }
+
+    /// <summary>
+    /// Replaces the match the find bar is sitting on. The match index is resolved again
+    /// against the current cell text, so a stale list cannot rewrite the wrong span.
+    /// </summary>
+    private void ReplaceOne(JsonElement payload)
+    {
+        if (_document is null)
+            return;
+
+        var query = ReadSearchQuery(payload);
+        if (query is null)
+            return;
+
+        if (_document.IsReadOnly)
+        {
+            SendError("This file is read-only.");
+            return;
+        }
+
+        var sheet = _document.Database.GetSheet(GetString(payload, "sheet"));
+        var rowIndex = GetInt(payload, "row");
+        var columnIndex = GetInt(payload, "column");
+        var matchIndex = GetInt(payload, "matchIndex");
+        var replacement = GetString(payload, "replacement");
+
+        if (sheet is null || rowIndex < 0 || rowIndex >= sheet.Lines.Count)
+            return;
+        if (columnIndex < 0 || columnIndex >= sheet.Columns.Count)
+            return;
+
+        var column = sheet.Columns[columnIndex];
+        if (!SearchEngine.CanReplace(column))
+        {
+            SendError($"'{column.Name}' cannot be replaced.");
+            return;
+        }
+
+        Regex? regex;
+        try
+        {
+            regex = SearchEngine.Compile(query);
+        }
+        catch (ArgumentException ex)
+        {
+            SendError("Invalid regular expression: " + ex.Message);
+            return;
+        }
+
+        var text = SearchEngine.TextOf(column, sheet.Lines[rowIndex]);
+        var spans = SearchEngine.FindAll(text, query, regex);
+        if (matchIndex < 0 || matchIndex >= spans.Count)
+        {
+            // The cell changed under the find bar; refreshing the list is the honest answer.
+            SearchCells(payload);
+            return;
+        }
+
+        var updated = SearchEngine.ReplaceOne(text, spans, replacement, matchIndex);
+        if (!TryWriteCellText(sheet, rowIndex, column, updated, out var error))
+        {
+            SendError(error);
+            return;
+        }
+
+        SendRowUpdated(sheet, rowIndex);
+        SendDirty();
+        SearchCells(payload);
+    }
+
+    /// <summary>Replaces every match in scope as a single undo step.</summary>
+    private void ReplaceAllCells(JsonElement payload)
+    {
+        if (_document is null)
+            return;
+
+        var query = ReadSearchQuery(payload);
+        if (query is null)
+            return;
+
+        if (_document.IsReadOnly)
+        {
+            SendError("This file is read-only.");
+            return;
+        }
+
+        var replacement = GetString(payload, "replacement");
+
+        Regex? regex;
+        try
+        {
+            regex = SearchEngine.Compile(query);
+        }
+        catch (ArgumentException ex)
+        {
+            SendError("Invalid regular expression: " + ex.Message);
+            return;
+        }
+
+        SearchResult result;
+        try
+        {
+            // No cap: "Replace All" has to mean all, even past the find bar's 5000-hit
+            // display limit. The match list is discarded right after this loop.
+            result = SearchEngine.Search(_document.Database, query, int.MaxValue);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            SendError("The regular expression took too long to run.");
+            return;
+        }
+
+        // One rewrite per cell even when several matches share it: the second match must not
+        // be applied to text the first one already changed.
+        var builder = new MultiCellEditCommand.Builder("Replace all");
+        var seen = new HashSet<(string Sheet, int Row, int Column)>();
+        var skipped = 0;
+
+        foreach (var match in result.Matches)
+        {
+            if (!seen.Add((match.SheetName, match.Row, match.Column)))
+                continue;
+
+            var sheet = _document.Database.GetSheet(match.SheetName);
+            if (sheet is null)
+                continue;
+
+            var column = sheet.Columns[match.Column];
+            if (!SearchEngine.CanReplace(column))
+            {
+                skipped++;
+                continue;
+            }
+
+            var text = SearchEngine.TextOf(column, sheet.Lines[match.Row]);
+            var updated = SearchEngine.ReplaceAll(text, query, regex, replacement);
+
+            CdbValue? value;
+            try
+            {
+                value = ValueCodec.ParseText(column, updated);
+            }
+            catch (CdbValidationException)
+            {
+                // "Replace 1 with 2" on an identifier column, or a regex that produces an
+                // invalid number: leave the cell alone and say how many were skipped.
+                skipped++;
+                continue;
+            }
+
+            builder.Add(sheet.Lines[match.Row], column.Name, value);
+        }
+
+        var command = builder.Build();
+        if (command is null)
+        {
+            SendToast("Nothing to replace.", "info");
+            return;
+        }
+
+        _document.Commands.Execute(command);
+        SendDirty();
+        // Rows in several tables may have changed; re-sending the description repaints them.
+        // The row counts are unchanged, so the grid keeps its scroll position.
+        SendDocument();
+
+        var replaced = command.Count;
+        var message = $"Replaced {replaced} cell{(replaced == 1 ? string.Empty : "s")}.";
+        if (skipped > 0)
+            message += $" {skipped} skipped.";
+        SendToast(message, "info");
+
+        SearchCells(payload);
+    }
+
+    /// <summary>
+    /// Parses replacement text through the column's own rules and records it as one undoable
+    /// edit. Returns false with a message when the text is not valid for the type.
+    /// </summary>
+    private bool TryWriteCellText(SheetData sheet, int rowIndex, Column column, string text, out string error)
+    {
+        error = string.Empty;
+
+        CdbValue? value;
+        try
+        {
+            value = ValueCodec.ParseText(column, text);
+        }
+        catch (CdbValidationException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+
+        var row = sheet.Lines[rowIndex];
+        if (ValuesEqual(row.Get(column.Name), value))
+            return true;
+
+        var index = sheet.Columns.IndexOf(column);
+        var command = new CellEditCommand(row, column.Name, value)
+        {
+            CursorBefore = CursorResolver.CreateAnchor(sheet, rowIndex, index),
+            CursorAfter = CursorResolver.CreateAnchor(sheet, rowIndex, index),
+        };
+        _document!.Commands.Execute(command);
+        return true;
+    }
+
+    private static SearchQuery? ReadSearchQuery(JsonElement payload)
+    {
+        var text = GetString(payload, "query");
+        if (text.Length == 0)
+            return null;
+
+        var scope = string.Equals(GetString(payload, "scope"), "document", StringComparison.Ordinal)
+            ? SearchScope.Document
+            : SearchScope.Table;
+
+        return new SearchQuery(
+            text,
+            GetBool(payload, "regex"),
+            GetBool(payload, "matchCase"),
+            scope,
+            GetString(payload, "sheet"));
+    }
+
+    private void SendSearchResults(SearchQuery? query, IReadOnlyList<SearchMatch> matches, bool truncated)
+    {
+        var array = new JsonArray();
+        foreach (var match in matches)
+        {
+            array.Add(new JsonObject
+            {
+                ["sheet"] = match.SheetName,
+                ["row"] = match.Row,
+                ["column"] = match.Column,
+                ["columnName"] = match.ColumnName,
+                ["start"] = match.Start,
+                ["length"] = match.Length,
+                ["text"] = match.Text,
+            });
+        }
+
+        Send(new JsonObject
+        {
+            ["type"] = "searchResults",
+            ["payload"] = new JsonObject
+            {
+                ["query"] = query?.Text,
+                ["scope"] = query?.Scope == SearchScope.Document ? "document" : "table",
+                ["sheet"] = query?.SheetName,
+                ["truncated"] = truncated,
+                ["matches"] = array,
+            },
+        });
+    }
+
     /// <summary>Returns the rows of the referenced sheet so the editor can offer them.</summary>
     private void SendRefOptions(JsonElement payload)
     {
@@ -1550,7 +1849,11 @@ public sealed partial class EditorHost
             return;
 
         _document.Commands.Execute(command);
-        RefreshAfterStructuralChange(sheet.Name, row);
+        // The two-argument overload parks the cursor on column 0: it is meant for row
+        // inserts and deletes, where the row is what moved. A paste is anchored to the
+        // cell it was invoked on, so pass that column through — otherwise every Ctrl+V
+        // throws the cursor back to the first cell of the row.
+        RefreshAfterStructuralChange(sheet.Name, row, column);
         SendToast(mode == "insert" ? "Rows inserted." : "Pasted.", "info");
     }
 
@@ -3224,20 +3527,16 @@ public sealed partial class EditorHost
         if (rowIndex < 0 || rowIndex >= sheet.Lines.Count)
             return;
 
-        var row = sheet.Lines[rowIndex];
-        var cells = new JsonArray();
+        // Same presentation state as the bulk load: a refresh must not drop the row's
+        // background colour (or its per-cell fills) just because one cell changed.
+        var table = _document.Meta.GetTable(sheet.Name);
+        var columnIds = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var column in sheet.Columns)
         {
-            var display = _formatter.Format(sheet, column, row, row.Get(column.Name));
-            cells.Add(new JsonObject
-            {
-                ["t"] = display.Text,
-                ["s"] = StateName(display.State),
-                ["d"] = display.Detail,
-            });
+            var id = _document.Meta.Document.FindColumnId(sheet.Name, column.Name);
+            if (id is not null)
+                columnIds[column.Name] = id;
         }
-
-        var idColumn = sheet.IdColumn;
 
         Send(new JsonObject
         {
@@ -3245,12 +3544,7 @@ public sealed partial class EditorHost
             ["payload"] = new JsonObject
             {
                 ["sheet"] = sheet.Name,
-                ["row"] = new JsonObject
-                {
-                    ["i"] = rowIndex,
-                    ["key"] = idColumn is null ? rowIndex.ToString() : row.GetString(idColumn.Name) ?? string.Empty,
-                    ["cells"] = cells,
-                },
+                ["row"] = BuildRowNode(sheet, rowIndex, table, columnIds),
             },
         });
 
@@ -3504,7 +3798,6 @@ public sealed partial class EditorHost
 
         var end = Math.Min(sheet.Lines.Count, start + count);
         var rows = new JsonArray();
-        var idColumn = sheet.IdColumn;
 
         // Presentation state is resolved once per request, not once per cell.
         var table = _document.Meta.GetTable(sheet.Name);
@@ -3517,53 +3810,7 @@ public sealed partial class EditorHost
         }
 
         for (var i = start; i < end; i++)
-        {
-            var row = sheet.Lines[i];
-            var rowKey = RowKey(sheet, i);
-            var cells = new JsonArray();
-
-            string? rowBackground = null;
-            if (table is not null && table.RowStyles.TryGetValue(rowKey, out var rowStyle))
-                rowBackground = rowStyle.Background;
-
-            Dictionary<string, StyleEntry>? cellStyles = null;
-            table?.CellStyles.TryGetValue(rowKey, out cellStyles);
-
-            foreach (var column in sheet.Columns)
-            {
-                var value = row.Get(column.Name);
-                var display = _formatter.Format(sheet, column, row, value);
-
-                var cell = new JsonObject
-                {
-                    ["t"] = display.Text,
-                    ["s"] = StateName(display.State),
-                    ["d"] = display.Detail,
-                };
-
-                if (cellStyles is not null &&
-                    columnIds.TryGetValue(column.Name, out var columnId) &&
-                    cellStyles.TryGetValue(columnId, out var cellStyle) &&
-                    cellStyle.Background is { } background)
-                {
-                    cell["bg"] = background;
-                }
-
-                cells.Add(cell);
-            }
-
-            var rowNode = new JsonObject
-            {
-                ["i"] = i,
-                ["key"] = idColumn is null ? rowKey : row.GetString(idColumn.Name) ?? string.Empty,
-                ["cells"] = cells,
-            };
-
-            if (rowBackground is not null)
-                rowNode["bg"] = rowBackground;
-
-            rows.Add(rowNode);
-        }
+            rows.Add(BuildRowNode(sheet, i, table, columnIds));
 
         Send(new JsonObject
         {
@@ -3576,6 +3823,67 @@ public sealed partial class EditorHost
                 ["rows"] = rows,
             },
         });
+    }
+
+    /// <summary>
+    /// Builds one display row, including the row and cell background colours stored in the
+    /// side-car. Both the initial window load and the single-row refresh after an edit go
+    /// through here: when the edit path built its own row it silently dropped <c>bg</c>, so
+    /// a coloured row lost its fill the moment a cell was edited and only got it back after
+    /// reloading the sheet.
+    /// </summary>
+    private JsonObject BuildRowNode(
+        SheetData sheet,
+        int index,
+        TableMeta? table,
+        Dictionary<string, string> columnIds)
+    {
+        var row = sheet.Lines[index];
+        var rowKey = RowKey(sheet, index);
+        var cells = new JsonArray();
+
+        string? rowBackground = null;
+        if (table is not null && table.RowStyles.TryGetValue(rowKey, out var rowStyle))
+            rowBackground = rowStyle.Background;
+
+        Dictionary<string, StyleEntry>? cellStyles = null;
+        table?.CellStyles.TryGetValue(rowKey, out cellStyles);
+
+        foreach (var column in sheet.Columns)
+        {
+            var value = row.Get(column.Name);
+            var display = _formatter!.Format(sheet, column, row, value);
+
+            var cell = new JsonObject
+            {
+                ["t"] = display.Text,
+                ["s"] = StateName(display.State),
+                ["d"] = display.Detail,
+            };
+
+            if (cellStyles is not null &&
+                columnIds.TryGetValue(column.Name, out var columnId) &&
+                cellStyles.TryGetValue(columnId, out var cellStyle) &&
+                cellStyle.Background is { } background)
+            {
+                cell["bg"] = background;
+            }
+
+            cells.Add(cell);
+        }
+
+        var idColumn = sheet.IdColumn;
+        var node = new JsonObject
+        {
+            ["i"] = index,
+            ["key"] = idColumn is null ? rowKey : row.GetString(idColumn.Name) ?? string.Empty,
+            ["cells"] = cells,
+        };
+
+        if (rowBackground is not null)
+            node["bg"] = rowBackground;
+
+        return node;
     }
 
     private static string StateName(CellState state) => state switch

@@ -88,6 +88,56 @@ internal static class SeparatorTitles
     public static List<(int Index, string? Title)> Read(SheetData sheet) =>
         sheet.GetSeparators().ToList();
 
+    /// <summary>
+    /// Separator indices after rows are inserted at <paramref name="index"/>.
+    /// A separator sitting exactly on the insertion point stays where it is, so the new
+    /// rows land under that heading; everything below it moves down with its row.
+    /// </summary>
+    public static List<(int Index, string? Title)> ForInsert(
+        IReadOnlyList<(int Index, string? Title)> before,
+        int index,
+        int count)
+    {
+        return before
+            .Select(pair => (pair.Index > index ? pair.Index + count : pair.Index, pair.Title))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Separator indices after a range of rows is deleted. A separator inside the range
+    /// goes with the row it marked; one on the first deleted row stays (it now heads the
+    /// row that moved up), and everything after the range moves up. If a heading and the
+    /// next heading end up on the same row, the first one wins, so the list stays sorted
+    /// and free of duplicates.
+    /// </summary>
+    public static List<(int Index, string? Title)> ForDelete(
+        IReadOnlyList<(int Index, string? Title)> before,
+        int index,
+        int count,
+        int newRowCount)
+    {
+        var result = new List<(int Index, string? Title)>(before.Count);
+
+        foreach (var pair in before)
+        {
+            if (pair.Index > index && pair.Index < index + count)
+                continue;
+
+            // A heading on the first deleted row survives only when another row takes its
+            // place; deleting the tail must not leave a divider after the last row.
+            if (pair.Index == index && index >= newRowCount)
+                continue;
+
+            var next = pair.Index >= index + count ? pair.Index - count : pair.Index;
+            if (result.Any(entry => entry.Index == next))
+                continue;
+
+            result.Add((next, pair.Title));
+        }
+
+        return result;
+    }
+
     public static void Write(SheetData sheet, List<(int Index, string? Title)> pairs)
     {
         // The on-disk array is sorted, so the titles are sorted with it.

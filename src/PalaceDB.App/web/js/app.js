@@ -39,6 +39,19 @@ const elements = {
   statusRows: document.getElementById('statusRows'),
   statusMode: document.getElementById('statusMode'),
   toasts: document.getElementById('toasts'),
+  findBar: document.getElementById('findBar'),
+  findInput: document.getElementById('findInput'),
+  findCount: document.getElementById('findCount'),
+  findPrev: document.getElementById('findPrev'),
+  findNext: document.getElementById('findNext'),
+  findRegex: document.getElementById('findRegex'),
+  findCase: document.getElementById('findCase'),
+  findScope: document.getElementById('findScope'),
+  findClose: document.getElementById('findClose'),
+  findReplaceRow: document.getElementById('findReplaceRow'),
+  replaceInput: document.getElementById('replaceInput'),
+  replaceOne: document.getElementById('replaceOne'),
+  replaceAll: document.getElementById('replaceAll'),
 };
 
 const state = {
@@ -52,6 +65,17 @@ const state = {
 
 /** Set when About was requested before the host answered with the build details. */
 let pendingAbout = false;
+
+/** Find / replace state. The host owns the matches; this only tracks the cursor in them. */
+const search = {
+  open: false,
+  matches: [],
+  index: -1,
+  truncated: false,
+  timer: null,
+  // True when the reply to the in-flight query should move the cursor to the match.
+  revealPending: false,
+};
 
 /** Sub-tables open under List / Properties cells, keyed by "row:col". Several at a time. */
 const subPanels = new Map();
@@ -159,14 +183,19 @@ const SIDEBAR_KEY = 'palacedb.sidebar.collapsed';
  * can be told apart; localStorage keeps it only as the fallback a file without a
  * palette of its own opens with.
  */
-function applySettings(next, { persist = true } = {}) {
+function applySettings(next, { persist = true, syncFileScheme = false } = {}) {
   const before = state.settings;
   state.settings = normalize(next);
   applyAppearance(state.settings);
 
   if (persist) {
     saveSettings(state.settings);
-    if (state.document && state.settings.scheme !== before.scheme) {
+    // The Settings window previews a palette by applying it with persist:false, so by
+    // the time its OK runs `before` already holds the new scheme and the comparison
+    // below cannot see the change. syncFileScheme forces the side-car write in that
+    // case; without it the file kept the old palette and the next document refresh
+    // (insert row, column options, ...) reverted the window to it.
+    if (state.document && (syncFileScheme || state.settings.scheme !== before.scheme)) {
       send('setFileScheme', { scheme: state.settings.scheme });
     }
   }
@@ -207,14 +236,14 @@ function toggleTheme() {
 
 function applySidebar(collapsed) {
   elements.sidebar.classList.toggle('collapsed', collapsed);
-  // The collapsed sidebar is hidden outright, so the only way back is a toolbar
-  // button. It lives in the toolbar but is only visible while collapsed.
+  // The list is hidden outright, but the toggle is pinned to the body's top-left
+  // corner, so it stays visible (and stays put) in both states.
   document.body.classList.toggle('sidebar-collapsed', collapsed);
 
   const item = document.querySelector('[data-menu="view"] [data-action="toggleSidebar"] span');
   if (item) item.textContent = collapsed ? 'Expand Table List' : 'Collapse Table List';
 
-  // The toolbar button is the single control for this: it keeps its place and only the
+  // The pinned button is the single control for this: it keeps its place and only the
   // chevron flips (CSS mirrors it), so the pointer never has to hunt for it.
   if (elements.sidebarExpand) {
     elements.sidebarExpand.title = collapsed
@@ -266,6 +295,9 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     closeMenus();
     hideContextMenu();
+    // Escape leaves find mode, unless the table is being edited (Escape cancels the
+    // editor there) or a dialog is up.
+    if (search.open && !grid.isEditing() && !modalOpen()) closeFindBar();
   }
 });
 
@@ -398,7 +430,9 @@ function openSettings() {
     onOk: () => {
       // Commits through applySettings so the palette also reaches the file's side-car;
       // the sizes are stored globally, the palette travels with the document.
-      applySettings(draft);
+      // The live preview already moved state.settings, hence syncFileScheme: the change
+      // is invisible to the "did it differ" check and has to be written explicitly.
+      applySettings(draft, { syncFileScheme: true });
       return true;
     },
     // Nothing was committed while the window was open, so cancelling only has to put
@@ -2389,6 +2423,292 @@ function refreshPanels(rowCount) {
 }
 
 
+// ---------------------------------------------------------------- find / replace
+
+/** The request the bar currently describes. The host fills in the actual hits. */
+function searchPayload() {
+  return {
+    query: elements.findInput.value,
+    regex: elements.findRegex.checked,
+    matchCase: elements.findCase.checked,
+    scope: elements.findScope.value,
+    sheet: state.currentSheet,
+  };
+}
+
+function openFindBar(withReplace) {
+  if (!state.document) return;
+
+  // A dialog or an open cell editor would swallow the keyboard; settle both first.
+  if (grid.isEditing()) editor.commit();
+
+  search.open = true;
+  elements.findBar.hidden = false;
+  elements.findReplaceRow.hidden = !withReplace;
+
+  // A reopened bar keeps its query and re-runs it, because the table may have changed.
+  if (elements.findInput.value) {
+    runSearch({ reveal: false });
+  } else {
+    search.matches = [];
+    search.index = -1;
+    applySearchHits();
+    updateFindCount();
+  }
+
+  elements.findInput.focus();
+  elements.findInput.select();
+}
+
+function closeFindBar() {
+  if (!search.open) return;
+
+  clearTimeout(search.timer);
+  search.open = false;
+  search.matches = [];
+  search.index = -1;
+  search.truncated = false;
+  search.revealPending = false;
+  elements.findBar.hidden = true;
+  grid.setSearchHits([], null);
+  updateFindCount();
+  elements.gridBody.focus();
+}
+
+/** Clears the bar without touching focus (used when the document goes away). */
+function resetSearch() {
+  clearTimeout(search.timer);
+  search.open = false;
+  search.matches = [];
+  search.index = -1;
+  search.truncated = false;
+  search.revealPending = false;
+  elements.findBar.hidden = true;
+  grid.setSearchHits([], null);
+  updateFindCount();
+}
+
+/** Sends a query. `reveal` moves the cursor to the first hit when the reply arrives. */
+function runSearch({ reveal = false } = {}) {
+  const payload = searchPayload();
+
+  if (!payload.query || !state.currentSheet) {
+    search.matches = [];
+    search.index = -1;
+    search.truncated = false;
+    applySearchHits();
+    updateFindCount();
+    return;
+  }
+
+  search.revealPending = reveal;
+  send('search', payload);
+}
+
+/** Coalesces keystrokes: one query per pause, not one per character. */
+function scheduleSearch() {
+  clearTimeout(search.timer);
+  search.timer = setTimeout(() => runSearch({ reveal: false }), 160);
+}
+
+/** Index of the first hit at or after the cursor, so typing does not jump backwards. */
+function firstMatchFromCursor(matches) {
+  const { row, col } = grid.cursor;
+  const sheet = state.currentSheet;
+
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i];
+    if (match.sheet !== sheet) continue;
+    if (match.row > row || (match.row === row && match.column >= col)) return i;
+  }
+  return 0;
+}
+
+function onSearchResults(payload) {
+  if (!search.open) return;
+
+  const matches = Array.isArray(payload.matches) ? payload.matches : [];
+  const previous = search.index >= 0 ? search.matches[search.index] : null;
+  const reveal = search.revealPending;
+  search.revealPending = false;
+
+  search.matches = matches;
+  search.truncated = Boolean(payload.truncated);
+
+  if (matches.length === 0) {
+    search.index = -1;
+    applySearchHits();
+    updateFindCount();
+    return;
+  }
+
+  // Keep the match the user was on when it survived the edit, otherwise start at the
+  // cursor. A late reply for an older query is ignored by checking the text as well.
+  let index = -1;
+  if (previous) {
+    index = matches.findIndex((match) =>
+      match.sheet === previous.sheet && match.row === previous.row &&
+      match.column === previous.column && match.start === previous.start);
+  }
+  if (index < 0) index = firstMatchFromCursor(matches);
+
+  search.index = index;
+
+  if (reveal) {
+    // Enter / the arrows: follow the match even into another table.
+    showMatch();
+    return;
+  }
+
+  // Typing only moves within the table on screen; switching tables under the user while
+  // they type would be disorienting. A hit elsewhere still counts and is one Enter away.
+  const match = search.matches[index];
+  if (match && match.sheet === state.currentSheet) {
+    grid.moveCursor(match.row, match.column, false, true, false);
+  }
+  applySearchHits();
+  updateFindCount();
+}
+
+function updateFindCount() {
+  const count = elements.findCount;
+  const total = search.matches.length;
+
+  if (!elements.findInput.value || total === 0) {
+    count.textContent = '0/0';
+    count.classList.toggle('none', Boolean(elements.findInput.value));
+    return;
+  }
+
+  count.classList.remove('none');
+  const position = search.index >= 0 ? search.index + 1 : 0;
+  count.textContent = search.truncated ? `${position}/${total}+` : `${position}/${total}`;
+}
+
+/** Paints the hits of the table on screen and marks the current one. */
+function applySearchHits() {
+  if (!search.open || search.matches.length === 0) {
+    grid.setSearchHits([], null);
+    return;
+  }
+
+  const hits = new Set();
+  for (const match of search.matches) {
+    if (match.sheet === state.currentSheet) hits.add(match.row + ':' + match.column);
+  }
+
+  const current = search.matches[search.index];
+  const currentKey = current && current.sheet === state.currentSheet
+    ? current.row + ':' + current.column
+    : null;
+  grid.setSearchHits(hits, currentKey);
+}
+
+/** Moves the cursor to the current match, switching tables when it lives elsewhere. */
+function showMatch() {
+  const match = search.matches[search.index];
+  if (!match) return;
+
+  if (match.sheet !== state.currentSheet) selectSheet(match.sheet);
+
+  // focus=false: the find field keeps the keyboard, so typing can continue.
+  grid.moveCursor(match.row, match.column, false, true, false);
+  applySearchHits();
+  updateFindCount();
+}
+
+function stepMatch(delta) {
+  if (search.matches.length === 0) {
+    runSearch({ reveal: true });
+    return;
+  }
+
+  search.index = (search.index + delta + search.matches.length) % search.matches.length;
+  showMatch();
+}
+
+/** Position of a match among the matches of its own cell, which is what replaceOne takes. */
+function matchIndexInCell(target) {
+  let index = 0;
+  for (const match of search.matches) {
+    if (match.sheet !== target.sheet || match.row !== target.row || match.column !== target.column)
+      continue;
+    if (match.start === target.start && match.length === target.length) return index;
+    index += 1;
+  }
+  return 0;
+}
+
+function replaceCurrent() {
+  const match = search.matches[search.index];
+  if (!match) {
+    stepMatch(1);
+    return;
+  }
+
+  send('replaceOne', {
+    ...searchPayload(),
+    sheet: match.sheet,
+    row: match.row,
+    column: match.column,
+    matchIndex: matchIndexInCell(match),
+    replacement: elements.replaceInput.value,
+  });
+}
+
+function replaceAllInScope() {
+  const payload = searchPayload();
+  if (!payload.query) return;
+  send('replaceAll', { ...payload, replacement: elements.replaceInput.value });
+}
+
+elements.findInput.addEventListener('input', scheduleSearch);
+
+elements.findInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    stepMatch(event.shiftKey ? -1 : 1);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeFindBar();
+  }
+});
+
+elements.replaceInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    replaceCurrent();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeFindBar();
+  }
+});
+
+// A toggle or scope change re-runs the query; keeping the index keeps the cursor put.
+elements.findRegex.addEventListener('change', () => runSearch({ reveal: false }));
+elements.findCase.addEventListener('change', () => runSearch({ reveal: false }));
+elements.findScope.addEventListener('change', () => runSearch({ reveal: false }));
+
+elements.findPrev.addEventListener('click', () => {
+  stepMatch(-1);
+  elements.findInput.focus();
+});
+elements.findNext.addEventListener('click', () => {
+  stepMatch(1);
+  elements.findInput.focus();
+});
+elements.replaceOne.addEventListener('click', () => {
+  replaceCurrent();
+  elements.replaceInput.focus();
+});
+elements.replaceAll.addEventListener('click', () => {
+  replaceAllInScope();
+  elements.replaceInput.focus();
+});
+elements.findClose.addEventListener('click', closeFindBar);
+
 // ---------------------------------------------------------------- shortcuts
 
 /**
@@ -2438,7 +2758,10 @@ document.addEventListener('keydown', (event) => {
   if (!event.ctrlKey) return;
 
   const key = event.key.toLowerCase();
-  if (key === 'o') { event.preventDefault(); send('openFile'); }
+  // A dialog field keeps its own Ctrl+F / Ctrl+H; the find bar is for the table.
+  if (key === 'f') { if (modalOpen()) return; event.preventDefault(); openFindBar(false); }
+  else if (key === 'h') { if (modalOpen()) return; event.preventDefault(); openFindBar(true); }
+  else if (key === 'o') { event.preventDefault(); send('openFile'); }
   else if (key === 's' && event.shiftKey) { event.preventDefault(); send('saveAs'); }
   else if (key === 's') { event.preventDefault(); send('save'); }
   else if (key === 'w') { event.preventDefault(); send('closeDocument'); }
@@ -2540,6 +2863,10 @@ function selectSheet(name) {
     rowCount: sheet.rowCount,
     columnCount: sheet.columns.length,
   });
+
+  // A find bar stays open across a table switch: the hits of the new table show up
+  // immediately, and the count still refers to the whole result set.
+  applySearchHits();
 }
 
 function showDocument(payload) {
@@ -2557,6 +2884,9 @@ function showDocument(payload) {
   elements.welcome.classList.toggle('hidden', true);
   elements.grid.classList.add('visible');
   toolbar.classList.add('visible');
+  // The pinned toggle belongs to the document view: with no database open the whole
+  // toolbar is hidden, and a lone button left behind looks like the tools vanished.
+  document.body.classList.remove('no-document');
   elements.statusMode.textContent = payload.readOnly ? 'Read only' : 'Editable';
   elements.statusMode.title = payload.readOnly ? (payload.readOnlyReason || 'Read only') : 'This file can be edited';
 
@@ -2574,6 +2904,10 @@ function showDocument(payload) {
 
   // A brand new database has no table yet; the grid area explains what to do next.
   elements.gridEmpty.classList.toggle('hidden', !!sheet);
+
+  // The description is re-sent after a replace-all or a save; the highlights belong to the
+  // new rows, not the old ones.
+  applySearchHits();
 
   // Fields of a list can be renamed or added while its panel is open, so every open
   // panel is refreshed against the document that has just arrived. A table that gained
@@ -2604,6 +2938,7 @@ function showWelcome() {
   elements.gridEmpty.classList.add('hidden');
   elements.grid.classList.remove('visible');
   toolbar.classList.remove('visible');
+  document.body.classList.add('no-document');
   elements.tableList.innerHTML = '';
   elements.statusSheet.textContent = '-';
   elements.statusCursor.textContent = '-';
@@ -2726,6 +3061,7 @@ onMessage((message) => {
       }
       break;
     case 'documentClosed':
+      resetSearch();
       showWelcome();
       // Without a file there is no per-file palette any more: back to the preference.
       applyFileScheme(null);
@@ -2740,6 +3076,9 @@ onMessage((message) => {
     case 'rows':
       grid.applyRows(message.payload);
       refreshIssue();
+      break;
+    case 'searchResults':
+      onSearchResults(message.payload);
       break;
     case 'firstIssue': {
       const payload = message.payload || {};
@@ -2867,6 +3206,10 @@ elements.tableList.addEventListener('contextmenu', (event) => {
 
 elements.sidebarRail.addEventListener('click', () => applySidebar(false));
 
+// The toggle is outside the toolbar, so it needs its own listener rather than the
+// toolbar's delegated one. Clicking it is the same as View ▸ Collapse / Ctrl+B / Tab.
+elements.sidebarExpand.addEventListener('click', toggleSidebar);
+
 // Restore the view preferences chosen during the previous session.
 try {
   applySettings(loadSettings(), { persist: false });
@@ -2889,6 +3232,10 @@ window.__palacedb = {
   toggleSidebar,
   openSettings,
   applySettings,
+  // Find / replace, exposed the same way as the settings window: the UI drives these,
+  // and the end-to-end suite needs to step matches without synthesising keystrokes.
+  openFindBar, closeFindBar, runSearch, stepMatch, replaceCurrent, replaceAllInScope,
+  searchState: search,
   isDark: () => document.body.classList.contains('theme-dark'),
 };
 

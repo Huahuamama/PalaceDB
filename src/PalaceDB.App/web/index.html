@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="css/themes.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
-<body>
+<body class="no-document">
 
 <div id="app" class="app">
 
@@ -76,6 +76,14 @@
   </div>
 
   <div class="body">
+    <!-- One toggle for the table list, pinned to the top-left corner of the body. It sits
+         to the left of the TABLES label while the list is open, and is outside both the
+         sidebar and the toolbar so hiding the list cannot move it. -->
+    <button class="sidebar-collapse" id="sidebarExpand" type="button" data-action="toggleSidebar"
+            title="Collapse the table list (Tab)" aria-label="Toggle the table list"
+            aria-controls="sidebar">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.179 10.5L12.1805 11.3737C11.9727 11.5556 11.9516 11.8714 12.1335 12.0793C12.3153 12.2871 12.6312 12.3081 12.839 12.1263L14.839 10.3763C14.9475 10.2814 15.0098 10.1442 15.0098 10C15.0098 9.85583 14.9475 9.71866 14.839 9.62372L12.839 7.87372C12.6312 7.69188 12.3153 7.71294 12.1335 7.92075C11.9516 8.12857 11.9727 8.44445 12.1805 8.62629L13.1791 9.50001L9.5 9.50001C9.22386 9.50001 9 9.72387 9 10C9 10.2762 9.22386 10.5 9.5 10.5L13.179 10.5ZM2 14C2 15.1046 2.89543 16 4 16H16C17.1046 16 18 15.1046 18 14V6C18 4.89543 17.1046 4 16 4H4C2.89543 4 2 4.89543 2 6V14ZM4 15C3.44771 15 3 14.5523 3 14L3 6C3 5.44772 3.44771 5 4 5H7L7 15H4ZM8 15L8 5L16 5C16.5523 5 17 5.44771 17 6L17 14C17 14.5523 16.5523 15 16 15L8 15Z"/></svg>
+    </button>
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <span class="sidebar-title">Tables</span>
@@ -86,15 +94,30 @@
     </aside>
 
     <main class="content" id="content">
+      <!-- Find / replace bar. It sits above the toolbar and never covers the table, so the
+           current match can be seen while stepping through hits. -->
+      <div class="findbar" id="findBar" hidden>
+        <div class="findbar-row">
+          <input class="find-input" id="findInput" type="text" placeholder="Find" autocomplete="off" spellcheck="false">
+          <span class="find-count" id="findCount">0/0</span>
+          <button class="find-btn" id="findPrev" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match">&#8249;</button>
+          <button class="find-btn" id="findNext" type="button" title="Next match (Enter)" aria-label="Next match">&#8250;</button>
+          <label class="find-opt" title="Regular expression"><input type="checkbox" id="findRegex"> Regex</label>
+          <label class="find-opt" title="Match case"><input type="checkbox" id="findCase"> Aa</label>
+          <select class="find-scope" id="findScope" title="Search scope">
+            <option value="table">This table</option>
+            <option value="document">Whole file</option>
+          </select>
+          <button class="find-close" id="findClose" type="button" title="Close (Esc)" aria-label="Close find bar">&#215;</button>
+        </div>
+        <div class="findbar-row" id="findReplaceRow" hidden>
+          <input class="find-input" id="replaceInput" type="text" placeholder="Replace with" autocomplete="off" spellcheck="false">
+          <button class="find-btn text" id="replaceOne" type="button" title="Replace the current match">Replace</button>
+          <button class="find-btn text" id="replaceAll" type="button" title="Replace every match in scope">Replace All</button>
+        </div>
+      </div>
+
       <div class="toolbar" id="toolbar">
-        <!-- One button, one place, one style: it collapses the table list and brings it
-             back, so the control never moves under the pointer. The chevron is mirrored
-             by CSS while the list is collapsed. -->
-        <button class="tool icon" id="sidebarExpand" type="button" data-action="toggleSidebar"
-                title="Collapse the table list (Tab)" aria-label="Toggle the table list">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.179 10.5L12.1805 11.3737C11.9727 11.5556 11.9516 11.8714 12.1335 12.0793C12.3153 12.2871 12.6312 12.3081 12.839 12.1263L14.839 10.3763C14.9475 10.2814 15.0098 10.1442 15.0098 10C15.0098 9.85583 14.9475 9.71866 14.839 9.62372L12.839 7.87372C12.6312 7.69188 12.3153 7.71294 12.1335 7.92075C11.9516 8.12857 11.9727 8.44445 12.1805 8.62629L13.1791 9.50001L9.5 9.50001C9.22386 9.50001 9 9.72387 9 10C9 10.2762 9.22386 10.5 9.5 10.5L13.179 10.5ZM2 14C2 15.1046 2.89543 16 4 16H16C17.1046 16 18 15.1046 18 14V6C18 4.89543 17.1046 4 16 4H4C2.89543 4 2 4.89543 2 6V14ZM4 15C3.44771 15 3 14.5523 3 14L3 6C3 5.44772 3.44771 5 4 5H7L7 15H4ZM8 15L8 5L16 5C16.5523 5 17 5.44771 17 6L17 14C17 14.5523 16.5523 15 16 15L8 15Z"/></svg>
-        </button>
-        <div class="toolbar-sep"></div>
         <button class="tool icon" data-action="addRow" type="button" title="Add a row" aria-label="Add a row">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5C10.2761 2.5 10.5 2.72386 10.5 3V9.5H17C17.2761 9.5 17.5 9.72386 17.5 10C17.5 10.2761 17.2761 10.5 17 10.5H10.5V17C10.5 17.2761 10.2761 17.5 10 17.5C9.72386 17.5 9.5 17.2761 9.5 17V10.5H3C2.72386 10.5 2.5 10.2761 2.5 10C2.5 9.72386 2.72386 9.5 3 9.5H9.5V3C9.5 2.72386 9.72386 2.5 10 2.5Z"/></svg>
         </button>

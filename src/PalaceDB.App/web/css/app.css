@@ -643,10 +643,13 @@ button.tool.primary {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  /* The table-list toggle is absolutely positioned against this corner, which never
+     moves: the menubar above it has a fixed height and the body is always full width. */
+  position: relative;
 }
 
-/* The table list doubles as the sheet tab strip. It can be collapsed down to a
-   narrow rail so the grid gets the full window width. */
+/* The table list doubles as the sheet tab strip. Collapsing hides it completely so the
+   grid gets the full window width. */
 .sidebar {
   width: var(--sidebar-width);
   flex: 0 0 auto;
@@ -659,14 +662,49 @@ button.tool.primary {
 }
 
 /* Collapsing removes the sidebar completely instead of leaving a strip behind: the
-   toolbar button brings it back, and no horizontal space is wasted meanwhile. */
+   pinned toggle brings it back, and no horizontal space is wasted meanwhile. */
 .sidebar.collapsed { display: none; }
 
-/* The one toggle lives in the toolbar and never moves: the same button collapses the
-   list and brings it back, so its position, size and style are identical in both
-   states. Only the chevron is mirrored. */
-#sidebarExpand svg { transition: transform 0.15s ease-out; }
-body.sidebar-collapsed #sidebarExpand svg { transform: scaleX(-1); }
+/* One toggle, pinned to the top-left corner of .body. It is a direct child of .body,
+   not of the sidebar or the toolbar, so neither one can shift it when the list is
+   hidden: its box is byte-for-byte the same in both states. Only the chevron flips.
+   The sidebar header leaves 42px on its left for it, and the toolbar does the same
+   while collapsed (see .toolbar below). */
+.sidebar-collapse {
+  position: absolute;
+  left: 4px;
+  top: 5px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 34px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: default;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+/* Before a database is open the toolbar is hidden entirely. Keep the pinned toggle in
+   step with it, or the top strip shows one lone button with all the other tools gone. */
+body.no-document .sidebar-collapse { display: none; }
+
+.sidebar-collapse:hover { background: var(--hover); color: var(--text); }
+
+.sidebar-collapse svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+  display: block;
+  transition: transform 0.15s ease-out;
+}
+
+body.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
 
 .sidebar-header {
   display: flex;
@@ -675,7 +713,8 @@ body.sidebar-collapsed #sidebarExpand svg { transform: scaleX(-1); }
   gap: 6px;
   height: 44px;
   flex: 0 0 auto;
-  padding: 0 8px 0 14px;
+  /* Room for the pinned toggle: "TABLES" starts to its right. */
+  padding: 0 8px 0 42px;
   background: transparent;
   color: var(--text-faint);
   font-size: calc(var(--font-size-small) - 1px);
@@ -1470,6 +1509,10 @@ textarea.editor-input:not(.editor-multiline) {
   border-bottom: 1px solid var(--border);
 }
 
+/* With the sidebar gone the toolbar starts at the window's left edge, so it leaves the
+   same 42px notch for the pinned toggle. Its own buttons may move; the toggle does not. */
+body.sidebar-collapsed .toolbar { padding-left: 42px; }
+
 .toolbar.visible { display: flex; }
 
 .tool {
@@ -1929,4 +1972,138 @@ input[type="range"]:focus-visible,
 .tool.danger {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+/* ---------------------------------------------------------------- find / replace */
+
+/* A bar, not a dialog: stepping through matches has to leave the table visible and
+   usable, which a modal would prevent. */
+.findbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-size-small);
+}
+
+.findbar[hidden] { display: none; }
+
+.findbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.find-input {
+  flex: 0 1 260px;
+  min-width: 110px;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-header);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.find-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.find-count {
+  min-width: 54px;
+  text-align: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.find-count.none { color: var(--danger); }
+
+.find-btn {
+  padding: 2px 7px;
+  font: inherit;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.find-btn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.find-btn:disabled { opacity: 0.45; }
+
+.find-btn.text {
+  padding: 4px 10px;
+  color: var(--text);
+  background: var(--bg-header);
+  border-color: var(--border);
+}
+
+.find-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.find-opt input { margin: 0; }
+
+.find-scope {
+  padding: 3px 4px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-header);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.find-close {
+  margin-left: auto;
+  padding: 1px 7px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.find-close:hover { background: var(--hover); color: var(--text); }
+
+/* Find hits.
+   The accent hue is also the separator colour in every theme, and the old tint was a
+   translucent accent: a hit looked like a piece of separator strip. The marker is warm
+   amber/orange instead, which no palette uses for its dividers, and it keeps an inset
+   ring so a hit stays readable on a coloured cell. The tint goes through
+   background-image, so the cell's own fill (an inline background-color) stays visible. */
+.cell.search-hit {
+  background-image: linear-gradient(rgba(255, 196, 0, 0.42), rgba(255, 196, 0, 0.42));
+  box-shadow: inset 0 0 0 1px rgba(176, 118, 0, 0.6);
+}
+
+/* The match under the cursor is stronger still. Its outline belongs to the cursor cell,
+   so the fill and ring are what set it apart. */
+.cell.search-current {
+  background-image: linear-gradient(rgba(255, 122, 0, 0.68), rgba(255, 122, 0, 0.68));
+  box-shadow: inset 0 0 0 2px #b45309;
+}
+
+/* Dark palettes need a little more punch: the same amber over a dark cell reads as
+   olive, which is much quieter than it looks on a light one. */
+body.theme-dark .cell.search-hit {
+  background-image: linear-gradient(rgba(255, 210, 70, 0.5), rgba(255, 210, 70, 0.5));
+  box-shadow: inset 0 0 0 1px rgba(255, 210, 70, 0.75);
+}
+
+body.theme-dark .cell.search-current {
+  background-image: linear-gradient(rgba(255, 138, 0, 0.78), rgba(255, 138, 0, 0.78));
+  box-shadow: inset 0 0 0 2px #ffb35c;
 }

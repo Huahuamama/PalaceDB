@@ -9,12 +9,18 @@ public sealed class RowInsertCommand : IEditorCommand
     private readonly SheetData _sheet;
     private readonly int _index;
     private readonly IReadOnlyList<CdbObject> _rows;
+    // Separators are row indices, so inserting rows above them has to move them too;
+    // otherwise a divider keeps its old number and lands in front of the wrong row.
+    private readonly List<(int Index, string? Title)> _beforeSeparators;
+    private readonly List<(int Index, string? Title)> _afterSeparators;
 
     public RowInsertCommand(SheetData sheet, int index, IReadOnlyList<CdbObject> rows, string? label = null)
     {
         _sheet = sheet;
         _index = index;
         _rows = rows;
+        _beforeSeparators = SeparatorTitles.Read(sheet);
+        _afterSeparators = SeparatorTitles.ForInsert(_beforeSeparators, index, rows.Count);
         Label = label ?? (rows.Count == 1 ? "Insert Row" : $"Insert {rows.Count} Rows");
     }
 
@@ -28,9 +34,17 @@ public sealed class RowInsertCommand : IEditorCommand
 
     public IReadOnlyList<CdbObject> Rows => _rows;
 
-    public void Execute() => _sheet.Lines.InsertRange(_index, _rows);
+    public void Execute()
+    {
+        _sheet.Lines.InsertRange(_index, _rows);
+        SeparatorTitles.Write(_sheet, _afterSeparators);
+    }
 
-    public void Undo() => _sheet.Lines.RemoveRange(_index, _rows.Count);
+    public void Undo()
+    {
+        _sheet.Lines.RemoveRange(_index, _rows.Count);
+        SeparatorTitles.Write(_sheet, _beforeSeparators);
+    }
 }
 
 /// <summary>
@@ -42,6 +56,8 @@ public sealed class RowDeleteCommand : IEditorCommand
     private readonly SheetData _sheet;
     private readonly int _index;
     private readonly List<CdbObject> _rows;
+    private readonly List<(int Index, string? Title)> _beforeSeparators;
+    private readonly List<(int Index, string? Title)> _afterSeparators;
 
     public RowDeleteCommand(SheetData sheet, int index, int count, string? label = null)
     {
@@ -51,6 +67,9 @@ public sealed class RowDeleteCommand : IEditorCommand
         _sheet = sheet;
         _index = index;
         _rows = sheet.Lines.GetRange(index, count);
+        _beforeSeparators = SeparatorTitles.Read(sheet);
+        _afterSeparators = SeparatorTitles.ForDelete(
+            _beforeSeparators, index, count, sheet.Lines.Count - count);
         Label = label ?? (count == 1 ? "Delete Row" : $"Delete {count} Rows");
     }
 
@@ -64,9 +83,17 @@ public sealed class RowDeleteCommand : IEditorCommand
 
     public IReadOnlyList<CdbObject> Rows => _rows;
 
-    public void Execute() => _sheet.Lines.RemoveRange(_index, _rows.Count);
+    public void Execute()
+    {
+        _sheet.Lines.RemoveRange(_index, _rows.Count);
+        SeparatorTitles.Write(_sheet, _afterSeparators);
+    }
 
-    public void Undo() => _sheet.Lines.InsertRange(_index, _rows);
+    public void Undo()
+    {
+        _sheet.Lines.InsertRange(_index, _rows);
+        SeparatorTitles.Write(_sheet, _beforeSeparators);
+    }
 }
 
 /// <summary>Moves a single row to another position.</summary>
