@@ -2,6 +2,8 @@
 
 PalaceDB is a Windows desktop editor for CastleDB .cdb game data files. It provides a spreadsheet-style interface for editing structured game data.
 
+> PalaceDB's source code, tests, and documentation were generated with AI coding tools.
+
 <img width="1316" height="790" alt="PalaceDB screenshot" src="https://github.com/user-attachments/assets/fa2a2323-6d9a-45bc-aec6-6a85ab34250f" />
 
 ## Features
