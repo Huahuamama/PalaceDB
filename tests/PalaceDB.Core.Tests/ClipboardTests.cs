@@ -230,6 +230,17 @@ public class ClipboardTests
     }
 
     [Fact]
+    public void MakeUniqueKeepsNumericIdsNumeric()
+    {
+        // "123_2" would not be a valid id any more, so the suffix has to be digits too.
+        var existing = new HashSet<string> { "123", "1232" };
+        Assert.Equal("1233", PasteService.MakeUnique("123", existing));
+
+        var leadingZeros = new HashSet<string> { "007" };
+        Assert.Equal("0072", PasteService.MakeUnique("007", leadingZeros));
+    }
+
+    [Fact]
     public void PasteIgnoresColumnsThatTheTargetSheetDoesNotHave()
     {
         var (db, sheet) = Setup();

@@ -20,6 +20,21 @@ public static partial class ValueCodec
     [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*$")]
     private static partial Regex IdentifierRegex();
 
+    [GeneratedRegex(@"^[0-9]+$")]
+    private static partial Regex NumericIdRegex();
+
+    /// <summary>
+    /// True when the text can be a row identifier: the classic
+    /// <c>[A-Za-z_][A-Za-z0-9_]*</c> form, or an all-digit id. Numeric ids occur in
+    /// hand-written and generated data (levels "0", "1", ...), and rejecting them made
+    /// those files impossible to edit.
+    /// </summary>
+    public static bool IsValidId(string text) =>
+        IdentifierRegex().IsMatch(text) || NumericIdRegex().IsMatch(text);
+
+    /// <summary>True for an all-digit identifier ("0", "123", "007").</summary>
+    public static bool IsNumericId(string text) => NumericIdRegex().IsMatch(text);
+
     [GeneratedRegex(@"^-?[0-9]+$")]
     private static partial Regex IntegerRegex();
 
@@ -47,14 +62,17 @@ public static partial class ValueCodec
                 return new CdbValue.Str(text);
 
             case ColumnType.Id:
-                if (!IdentifierRegex().IsMatch(text))
-                    throw new CdbValidationException("An identifier must match [A-Za-z_][A-Za-z0-9_]*.");
+                if (!IsValidId(text))
+                    throw new CdbValidationException(
+                        "An identifier must match [A-Za-z_][A-Za-z0-9_]* or be all digits.");
                 return new CdbValue.Str(text);
 
             case ColumnType.Ref:
                 if (text.Length == 0)
                     return optional ? null : new CdbValue.Str(string.Empty);
-                if (!IdentifierRegex().IsMatch(text))
+                // A reference must accept whatever the target table can use as an id,
+                // including an all-digit one.
+                if (!IsValidId(text))
                     throw new CdbValidationException("A reference must be a valid identifier.");
                 return new CdbValue.Str(text);
 

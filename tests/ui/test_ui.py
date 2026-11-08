@@ -1107,7 +1107,10 @@ evaluate("""
 time.sleep(0.4)
 check("row context menu opens", evaluate("!document.getElementById('contextMenu').hidden"))
 labels = evaluate("Array.from(document.querySelectorAll('#contextMenu .context-item span')).map(s=>s.textContent).join('|')")
-check("context menu lists row actions", "Insert Row Above" in labels and "Delete Row" in labels, labels)
+check("the cell menu is about the value", "Cut" in labels and "Copy" in labels, labels)
+check("the cell menu no longer carries row actions",
+      "Insert Row Above" not in labels and "Delete Row" not in labels
+      and "Insert Paste" not in labels, labels)
 evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))")
 time.sleep(0.3)
 check("context menu closes on Escape", evaluate("document.getElementById('contextMenu').hidden"))
@@ -2278,6 +2281,19 @@ if id_name:
     check("the report names the table and the row",
           bool(text) and "Row 1" in text and evaluate("__palacedb.state.currentSheet") in text, text)
 
+    # The cell shows "#DUP(id)" and the editor used to open blank, as if the id had been
+    # lost. It has to start from the id the row really holds.
+    id_col = evaluate("__palacedb.grid.columns.findIndex(c => c.name === %s)" % json.dumps(id_name))
+    evaluate("__palacedb.grid.moveCursor(1, %d)" % id_col)
+    evaluate("__palacedb.grid.onEditRequest(1, %d)" % id_col)
+    wait_for("!!document.querySelector('.editor-input')", 5)
+    editor_value = evaluate("document.querySelector('.editor-input').value")
+    check("editing a duplicate id starts from the real id", editor_value == first_id,
+          (first_id, editor_value))
+    evaluate("document.querySelector('.editor-input')"
+             ".dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))")
+    wait_for("!document.querySelector('.editor-input')", 5)
+
     # Clearing the value must remove the message again.
     evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, "
              f"row: 1, column: {json.dumps(id_name)}, text: 'DUP_FIXED'}})")
@@ -2287,6 +2303,25 @@ if id_name:
     evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
     evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
     time.sleep(0.6)
+
+    # A pure-digit id is valid too, and duplicating such a row must keep the copy numeric
+    # ("12345_2" would not be a valid id any more).
+    evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, "
+             f"row: 2, column: {json.dumps(id_name)}, text: '12345'}})")
+    time.sleep(0.9)
+    numeric_id = evaluate("__palacedb.grid.cellValue(2, %d).t" % id_col)
+    check("a pure-digit id is accepted", numeric_id == "12345", numeric_id)
+
+    rows_before_numeric = evaluate("__palacedb.grid.rowCount")
+    evaluate("__palacedb.send('duplicateRows', {sheet: __palacedb.state.currentSheet, rows: [2]})")
+    wait_for("__palacedb.grid.rowCount === %d" % (rows_before_numeric + 1), 8)
+    time.sleep(0.5)
+    copy_id = evaluate("__palacedb.grid.cellValue(3, %d).t" % id_col)
+    check("duplicating a numeric id keeps the copy numeric",
+          isinstance(copy_id, str) and copy_id.isdigit(), copy_id)
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+    evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+    time.sleep(0.7)
 
 # --- the in-cell editor is the same size as the cell it covers
 # A row is as tall as its tallest cell, so a Text cell can be several lines tall while
@@ -3426,21 +3461,22 @@ time.sleep(0.6)
 menu_labels = evaluate("Array.from(document.querySelectorAll('#contextMenu .context-item'))"
                        ".map(b => b.textContent)")
 check("right-clicking a row number opens its menu",
-      bool(menu_labels) and any("Insert Row Here" in label for label in menu_labels), menu_labels)
-check("the row menu offers paste, add and delete",
-      any("Paste" in label for label in menu_labels)
-      and any("Add Row" in label for label in menu_labels)
-      and any("Delete" in label for label in menu_labels), menu_labels)
+      bool(menu_labels) and any("Insert Row Above" in label for label in menu_labels), menu_labels)
+check("the row menu has the row actions and no Add Row",
+      all(any(part in label for label in menu_labels) for part in
+          ("Insert Row Below", "Duplicate Row", "Delete Row",
+           "Add Separator", "Name Separator", "Insert Paste"))
+      and not any("Add Row" in label for label in menu_labels), menu_labels)
 
 rows_before_menu = evaluate("__palacedb.grid.rowCount")
 evaluate("""(() => {
   const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
-    .find(b => b.textContent.indexOf('Insert Row Here') === 0);
+    .find(b => b.textContent.indexOf('Insert Row Above') === 0);
   if (item) item.dispatchEvent(new MouseEvent('click', {bubbles: true}));
   return true;
 })()""")
 ok = wait_for("__palacedb.grid.rowCount === %d" % (rows_before_menu + 1), 10)
-check("Insert Row Here adds a row", ok,
+check("Insert Row Above adds a row", ok,
       (rows_before_menu, evaluate("__palacedb.grid.rowCount")))
 evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
 time.sleep(0.8)

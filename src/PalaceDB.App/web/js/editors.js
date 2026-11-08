@@ -83,8 +83,10 @@ export class CellEditor {
     // a single character into an empty cell compares "1" against "1" and writes nothing.
     //
     // A placeholder marker is not a value: editing an empty image must start blank
-    // instead of offering to save the literal text "#MISSING".
-    const currentText = data && !isMarker(data.t) ? data.t : '';
+    // instead of offering to save the literal text "#MISSING". A duplicate identifier is
+    // different: "#DUP(sword)" carries the id the row really holds, so the editor starts
+    // from "sword" — starting blank made it look as if the original text was gone.
+    const currentText = data ? (isMarker(data.t) ? markerText(data.t) : data.t) : '';
     const startText = initialText !== undefined && initialText !== null
       ? initialText
       : currentText;
@@ -816,6 +818,15 @@ export class CellEditor {
 /** True for the placeholders the formatter uses when a value is missing or invalid. */
 function isMarker(text) {
   return typeof text === 'string' && /^#(NULL|MISSING|DUP|REF|INVALID|NOTFOUND)\b/.test(text);
+}
+
+/**
+ * The value hidden inside a marker. "#DUP(sword)" and "#REF(sword)" both keep the raw
+ * text in parentheses; every other marker stands for "there is no value here".
+ */
+function markerText(text) {
+  const match = /^#(?:DUP|REF)\((.*)\)$/.exec(text || '');
+  return match ? match[1] : '';
 }
 
 function toColorInput(text) {

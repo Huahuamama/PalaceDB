@@ -62,6 +62,9 @@ public class ValueCodecTests
     [InlineData("sword")]
     [InlineData("_private")]
     [InlineData("a1")]
+    [InlineData("0")]
+    [InlineData("123")]
+    [InlineData("007")]
     public void IdentifierAcceptsValidNames(string text)
     {
         var value = ValueCodec.ParseText(Col("Items", "id"), text);
@@ -72,10 +75,21 @@ public class ValueCodecTests
     [InlineData("1abc")]
     [InlineData("has space")]
     [InlineData("has-dash")]
+    [InlineData("-1")]
+    [InlineData("1.5")]
     [InlineData("")]
     public void IdentifierRejectsInvalidNames(string text)
     {
         Assert.Throws<CdbValidationException>(() => ValueCodec.ParseText(Col("Items", "id"), text));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("123")]
+    public void ReferenceAcceptsNumericIds(string text)
+    {
+        var value = ValueCodec.ParseText(Col("Items", "parent"), text);
+        Assert.Equal(text, Assert.IsType<CdbValue.Str>(value).Value);
     }
 
     [Fact]

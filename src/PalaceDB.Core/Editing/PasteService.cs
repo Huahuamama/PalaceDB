@@ -225,15 +225,20 @@ public static class PasteService
         return new RowInsertCommand(sheet, index, newRows, label);
     }
 
-    /// <summary>Appends "_2", "_3", ... until the identifier is free.</summary>
+    /// <summary>
+    /// Appends "_2", "_3", ... until the identifier is free. A numeric id keeps its form:
+    /// "123_2" is not a valid id any more, so the suffix is appended as digits instead
+    /// ("1232", "1233", ...), and leading zeros survive ("007" -> "0072").
+    /// </summary>
     public static string MakeUnique(string proposed, ISet<string> existing)
     {
         if (existing.Add(proposed))
             return proposed;
 
+        var numeric = ValueCodec.IsNumericId(proposed);
         for (var suffix = 2; suffix < 10000; suffix++)
         {
-            var candidate = $"{proposed}_{suffix}";
+            var candidate = numeric ? $"{proposed}{suffix}" : $"{proposed}_{suffix}";
             if (existing.Add(candidate))
                 return candidate;
         }

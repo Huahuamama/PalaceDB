@@ -161,6 +161,9 @@ function runRowAction(action) {
     case 'pasteInsert':
       send('pasteCells', { sheet: state.currentSheet, row: grid.cursor.row, mode: 'insert' });
       break;
+    case 'pasteInsertAt':
+      if (state.currentSheet) send('pasteCells', { sheet: state.currentSheet, row: arg, mode: 'insert' });
+      break;
     default:
       break;
   }
@@ -722,6 +725,9 @@ function runAction(action, arg) {
     case 'insertRowAt':
       if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: arg });
       break;
+    case 'insertRowBelowAt':
+      if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: arg + 1 });
+      break;
     case 'appendRow':
       if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: grid.rowCount });
       break;
@@ -812,8 +818,14 @@ function runAction(action, arg) {
     case 'toggleSeparator':
       if (state.currentSheet) send('toggleSeparator', { sheet: state.currentSheet, row: grid.cursor.row });
       break;
+    case 'toggleSeparatorAt':
+      if (state.currentSheet) send('toggleSeparator', { sheet: state.currentSheet, row: arg });
+      break;
     case 'nameSeparator':
       promptSeparatorTitle();
+      break;
+    case 'nameSeparatorAt':
+      promptSeparatorTitle(arg);
       break;
     case 'displayColumn':
       promptDisplayColumn();
@@ -1091,27 +1103,12 @@ grid.onContextMenu = ({ header, x, y }) => {
     return;
   }
 
-  const count = grid.selectedRowIndices().length;
-  const hasSeparator = grid.separatorTitles.has(grid.cursor.row);
-  const separatorTitle = grid.separatorTitles.get(grid.cursor.row) || '';
-
+  // Row operations live on the row number, not here: a cell menu is about the value under
+  // the pointer, and having "delete row" next to "copy" made it too easy to hit by mistake.
   showContextMenu(x, y, [
-    { label: 'Insert Row Above', action: 'insertRowAbove' },
-    { label: 'Insert Row Below', action: 'insertRowBelow' },
-    { label: count > 1 ? `Duplicate ${count} Rows` : 'Duplicate Row', action: 'duplicateRows' },
-    { label: count > 1 ? `Delete ${count} Rows` : 'Delete Row', action: 'deleteRows' },
-    'sep',
-    { label: hasSeparator ? 'Remove Separator' : 'Add Separator', action: 'toggleSeparator' },
-    {
-      label: separatorTitle ? `Name Separator... (${separatorTitle})` : 'Name Separator...',
-      action: 'nameSeparator',
-      disabled: !hasSeparator,
-    },
-    'sep',
     { label: 'Cut', action: 'cut', shortcut: 'Ctrl+X' },
     { label: 'Copy', action: 'copy', shortcut: 'Ctrl+C' },
     { label: 'Paste', action: 'paste', shortcut: 'Ctrl+V' },
-    { label: 'Insert Paste', action: 'pasteInsert', shortcut: 'Ctrl+Shift+V' },
     'sep',
     { label: 'Clear Cells', action: 'clearCells', shortcut: 'Del' },
     { label: 'Select All', action: 'selectAll', shortcut: 'Ctrl+A' },
@@ -1129,18 +1126,31 @@ grid.onRowMove = (from, to) => {
   send('moveRow', { sheet: state.currentSheet, from, to });
 };
 
-// The row number is also where a row is grabbed, so it carries the row actions.
+// The row number is also where a row is grabbed, so the whole row menu lives here. Every
+// action that targets "this row" passes the row number explicitly: a right-click inside a
+// block selection keeps the selection, so the cursor is not necessarily the clicked row.
 grid.onGutterMenu = ({ row, x, y }) => {
   if (!state.currentSheet) return;
 
   const count = grid.selectedRowIndices().length;
+  const hasSeparator = grid.separatorTitles.has(row);
+  const separatorTitle = grid.separatorTitles.get(row) || '';
 
   showContextMenu(x, y, [
-    { label: 'Insert Row Here', action: 'insertRowAt', arg: row },
-    { label: 'Paste', action: 'pasteAt', arg: row, shortcut: 'Ctrl+V' },
-    'sep',
-    { label: 'Add Row', action: 'appendRow' },
+    { label: 'Insert Row Above', action: 'insertRowAt', arg: row },
+    { label: 'Insert Row Below', action: 'insertRowBelowAt', arg: row },
+    { label: count > 1 ? `Duplicate ${count} Rows` : 'Duplicate Row', action: 'duplicateRows' },
     { label: count > 1 ? `Delete ${count} Rows` : 'Delete Row', action: 'deleteRows' },
+    'sep',
+    { label: hasSeparator ? 'Remove Separator' : 'Add Separator', action: 'toggleSeparatorAt', arg: row },
+    {
+      label: separatorTitle ? `Name Separator... (${separatorTitle})` : 'Name Separator...',
+      action: 'nameSeparatorAt',
+      arg: row,
+      disabled: !hasSeparator,
+    },
+    'sep',
+    { label: 'Insert Paste', action: 'pasteInsertAt', arg: row, shortcut: 'Ctrl+Shift+V' },
   ]);
 };
 
@@ -2277,10 +2287,11 @@ function promptTemplates() {
 // ---------------------------------------------------------------- separators
 
 /** Renames the separator in front of the cursor row. */
-function promptSeparatorTitle() {
+function promptSeparatorTitle(targetRow) {
   if (!state.currentSheet) return;
 
-  const row = grid.cursor.row;
+  // The row menu names the row it was opened on; the keyboard path uses the cursor.
+  const row = Number.isFinite(targetRow) ? targetRow : grid.cursor.row;
   const current = grid.separatorTitles.get(row) || '';
 
   promptText({
