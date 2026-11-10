@@ -102,12 +102,18 @@ public sealed class RowMoveCommand : IEditorCommand
     private readonly SheetData _sheet;
     private readonly int _from;
     private readonly int _to;
+    // A divider heads the row below it, so dragging that row has to carry the divider
+    // along instead of leaving it on the row number the row used to have.
+    private readonly List<(int Index, string? Title)> _beforeSeparators;
+    private readonly List<(int Index, string? Title)> _afterSeparators;
 
     public RowMoveCommand(SheetData sheet, int from, int to, string? label = null)
     {
         _sheet = sheet;
         _from = from;
         _to = to;
+        _beforeSeparators = SeparatorTitles.Read(sheet);
+        _afterSeparators = SeparatorTitles.ForMove(_beforeSeparators, from, to);
         Label = label ?? "Move Row";
     }
 
@@ -122,6 +128,7 @@ public sealed class RowMoveCommand : IEditorCommand
         var row = _sheet.Lines[_from];
         _sheet.Lines.RemoveAt(_from);
         _sheet.Lines.Insert(_to, row);
+        SeparatorTitles.Write(_sheet, _afterSeparators);
     }
 
     public void Undo()
@@ -129,5 +136,6 @@ public sealed class RowMoveCommand : IEditorCommand
         var row = _sheet.Lines[_to];
         _sheet.Lines.RemoveAt(_to);
         _sheet.Lines.Insert(_from, row);
+        SeparatorTitles.Write(_sheet, _beforeSeparators);
     }
 }

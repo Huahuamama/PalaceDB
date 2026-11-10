@@ -79,9 +79,15 @@ public static class SearchEngine
     /// The text a cell contributes to the search. Mirrors what the editor would show when
     /// the cell is opened, not the grid's abbreviated display.
     /// </summary>
-    public static string TextOf(Column column, CdbObject row)
+    public static string TextOf(Column column, CdbObject row) =>
+        TextOf(column, row.Get(column.Name));
+
+    /// <summary>
+    /// The editor text of a value in a column. Also used when a paste has to convert a
+    /// value into another column's type: an enum converts through its label, not its index.
+    /// </summary>
+    public static string TextOf(Column column, CdbValue? value)
     {
-        var value = row.Get(column.Name);
         if (value is null or CdbValue.Null)
             return string.Empty;
 

@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using PalaceDB.Core.Metadata;
+using PalaceDB.Core.Settings;
 
 namespace PalaceDB.App;
 
@@ -52,15 +53,34 @@ public partial class App : Application
         var window = new MainWindow();
         MainWindow = window;
 
-        if (files.Length > 0)
+        // Without a path on the command line the session picks up where the last one left
+        // off: the most recently used database that still exists opens straight away.
+        var target = files.Length > 0 ? files[0] : MostRecentFile();
+        if (target is not null)
         {
             // Placed before the first paint, because a remembered position applied after
             // Show() is what made the window jump every time a file was opened.
-            window.PlaceBeforeShow(MetaStore.ReadWindowState(files[0]));
-            window.OpenFileWhenReady(files[0]);
+            window.PlaceBeforeShow(MetaStore.ReadWindowState(target));
+            window.OpenFileWhenReady(target);
         }
 
         window.Show();
+    }
+
+    /// <summary>
+    /// The database a start without arguments reopens. A missing or unreadable settings
+    /// file means "nothing to reopen", never a failed start.
+    /// </summary>
+    private static string? MostRecentFile()
+    {
+        try
+        {
+            return AppSettings.Load(AppSettings.PathFor(DataFolder)).MostRecentExisting();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

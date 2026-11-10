@@ -215,6 +215,24 @@ public partial class MainWindow : Window
         return true;
     }
 
+    /// <summary>
+    /// Placement for a window opened from this one when the file has no geometry of its
+    /// own: shifted a little, so the new database does not hide exactly behind the one
+    /// that is already on screen. Returns null when this window has no position yet, which
+    /// lets the new window use its default placement.
+    /// </summary>
+    public MetaWindowState? CascadePlacement(double step = 32)
+    {
+        if (!TryCapturePlacement(out var current) || !current.HasPosition)
+            return null;
+
+        var rect = WindowPlacement.Fit(current, Desktop());
+        var shifted = new PlacementRect(rect.Left + step, rect.Top + step, rect.Width, rect.Height);
+
+        // Fit() inside PlaceBeforeShow pulls the shifted rectangle back onto the desktop.
+        return WindowPlacement.Capture(shifted, current.Maximized);
+    }
+
     /// <summary>The desktop covered by all monitors, in device-independent pixels.</summary>
     private static PlacementRect Desktop() => new(
         SystemParameters.VirtualScreenLeft,

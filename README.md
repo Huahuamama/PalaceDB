@@ -18,6 +18,7 @@ PalaceDB is a Windows desktop editor for CastleDB .cdb game data files. It provi
 - Table templates for synchronizing column definitions.
 - Undo and redo.
 - Automatic backups and recovery.
+- Reopens the most recent database on start-up; recent files open in their own window.
 - Read-only access when the same database is open in another window.
 
 ## Installation
@@ -115,6 +116,7 @@ PalaceDB 是一个 Windows 桌面端编辑器，用于编辑 [CastleDB](https://
 - 支持表模板，可同步多个数据表的列结构。
 - 支持撤销和重做。
 - 自动备份与数据恢复。
+- 启动时自动打开最近编辑过的数据库；最近文件在新窗口中打开。
 - 同一数据库在多个窗口打开时，后续窗口以只读模式运行。
 
 ## 安装

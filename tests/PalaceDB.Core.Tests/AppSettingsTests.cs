@@ -259,4 +259,43 @@ public class AppSettingsTests : IDisposable
         Assert.Contains("\"recentFiles\"", text);
         Assert.Contains("a.cdb", text);
     }
+
+    // ------------------------------------------------------------ what a start reopens (F03)
+
+    [Fact]
+    public void TheNewestRememberedFileIsTheOneToReopen()
+    {
+        var older = Touch("older.cdb");
+        var newer = Touch("newer.cdb");
+
+        var settings = new AppSettings();
+        settings.AddRecent(older);
+        settings.AddRecent(newer);
+
+        Assert.Equal(newer, settings.MostRecentExisting());
+    }
+
+    [Fact]
+    public void ReopeningSkipsFilesThatAreGone()
+    {
+        var alive = Touch("alive.cdb");
+        var gone = _temp.At("gone.cdb");
+
+        var settings = new AppSettings();
+        settings.AddRecent(alive);
+        settings.AddRecent(gone);
+
+        // The newest entry points at a deleted file: the next one that exists is used.
+        Assert.Equal(alive, settings.MostRecentExisting());
+    }
+
+    [Fact]
+    public void ReopeningIsNotAttemptedWithoutAUsableFile()
+    {
+        var settings = new AppSettings();
+        Assert.Null(settings.MostRecentExisting());
+
+        settings.AddRecent(_temp.At("gone.cdb"));
+        Assert.Null(settings.MostRecentExisting());
+    }
 }

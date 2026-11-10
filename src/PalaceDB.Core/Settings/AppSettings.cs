@@ -138,6 +138,29 @@ public sealed class AppSettings
         RecentFiles.Clear();
     }
 
+    /// <summary>
+    /// The file a fresh start should reopen: the newest remembered database that is still
+    /// there. Entries whose file has been deleted are skipped rather than reported, so a
+    /// missing file never turns into a failed start-up.
+    /// </summary>
+    public string? MostRecentExisting()
+    {
+        foreach (var path in RecentFiles)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    return path;
+            }
+            catch
+            {
+                // An unusable path is simply skipped.
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Entries formatted for the File menu, newest first.</summary>
     public List<RecentFile> Describe()
     {

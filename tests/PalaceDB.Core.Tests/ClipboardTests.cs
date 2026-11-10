@@ -135,7 +135,7 @@ public class ClipboardTests
         var payload = ClipboardService.Deserialize(text)!;
 
         var stack = new CommandStack();
-        stack.Execute(PasteService.BuildOverwrite(sheet, 1, 0, payload)!);
+        stack.Execute(PasteService.BuildOverwrite(sheet, 1, 1, payload)!);
         Assert.Equal("Sword", sheet.Lines[1].GetString("name"));
 
         stack.Undo();
@@ -150,11 +150,28 @@ public class ClipboardTests
         var payload = ClipboardService.Deserialize(text)!;
 
         var stack = new CommandStack();
-        var command = PasteService.BuildOverwrite(sheet, 2, 0, payload);
+        var command = PasteService.BuildOverwrite(sheet, 2, 1, payload);
         stack.Execute(command!);
 
         Assert.Equal(3, sheet.Lines.Count);
         Assert.Equal("Sword", sheet.Lines[2].GetString("name"));
+    }
+
+    [Fact]
+    public void PasteLandsInTheColumnUnderTheCursor()
+    {
+        var (db, sheet) = Setup();
+        // A copied column belongs where the cursor is, not where it came from: matching
+        // by column name would write the numbers back into "cost" and leave "name" empty.
+        var text = ClipboardService.Serialize(sheet, new[] { 0 }, new[] { "cost" }, true);
+        var payload = ClipboardService.Deserialize(text)!;
+
+        var stack = new CommandStack();
+        stack.Execute(PasteService.BuildOverwrite(sheet, 1, 1, payload)!);
+
+        // The number is converted through the text its own column shows.
+        Assert.Equal("10", sheet.Lines[1].GetString("name"));
+        Assert.Equal(5d, ((CdbValue.Number)sheet.Lines[1].Get("cost")!).Value);
     }
 
     [Fact]
@@ -241,23 +258,34 @@ public class ClipboardTests
     }
 
     [Fact]
-    public void PasteIgnoresColumnsThatTheTargetSheetDoesNotHave()
+    public void AValueFromAnotherSheetIsConvertedByItsOwnText()
     {
         var (db, sheet) = Setup();
         var payload = new ClipboardPayload
         {
             Sheet = "Other",
-            Columns = new List<string> { "name", "unknown" },
-            Rows = new List<List<CdbValue>>
-            {
-                new() { CdbValue.Of("Pasted"), CdbValue.Of("ignored") },
-            },
+            Columns = new List<string> { "cost" },
+            Rows = new List<List<CdbValue>> { new() { CdbValue.Of(42) } },
         };
 
-        var stack = new CommandStack();
-        stack.Execute(PasteService.BuildOverwrite(sheet, 0, 0, payload)!);
+        var command = PasteService.BuildOverwrite(sheet, 0, 1, payload, out var skipped);
+        command!.Execute();
 
-        Assert.Equal("Pasted", sheet.Lines[0].GetString("name"));
-        Assert.Null(sheet.Lines[0].Get("unknown"));
+        Assert.Equal(0, skipped);
+        Assert.Equal("42", sheet.Lines[0].GetString("name"));
+    }
+
+    [Fact]
+    public void AValueThatDoesNotFitTheTargetColumnIsSkipped()
+    {
+        var (db, sheet) = Setup();
+        var text = ClipboardService.Serialize(sheet, new[] { 0 }, new[] { "name" }, true);
+        var payload = ClipboardService.Deserialize(text)!;
+
+        // "Sword" is not a number, so nothing is written into the integer column.
+        var command = PasteService.BuildOverwrite(sheet, 0, 2, payload, out var skipped);
+
+        Assert.Null(command);
+        Assert.Equal(1, skipped);
     }
 }

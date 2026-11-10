@@ -186,12 +186,22 @@ export class CellEditor {
       // captured — which is what made the arrows jump around after a few edits.
       if (!this.active || this.active.input !== input) return;
 
-      // The grid listens for the same keys; an editor key must never reach it.
-      event.stopPropagation();
-
       // A Chinese/Japanese IME uses Enter to accept a candidate. That keystroke belongs
       // to the composition, not to the grid, so it must not commit the cell.
-      if (event.isComposing || event.keyCode === 229) return;
+      if (event.isComposing || event.keyCode === 229) {
+        event.stopPropagation();
+        return;
+      }
+
+      // Tab is the sidebar shortcut now, not a cell move. Commit the text first (focus is
+      // about to leave the editor) and let the event bubble to the document handler.
+      if (event.key === 'Tab' && !event.shiftKey) {
+        this.commit();
+        return;
+      }
+
+      // The grid listens for the same keys; an editor key must never reach it.
+      event.stopPropagation();
 
       if (event.key === 'Enter' && multiline && event.shiftKey) {
         // Shift+Enter inserts a line break; a bare Enter still commits and moves on.
@@ -206,11 +216,6 @@ export class CellEditor {
       } else if (event.key === 'Escape') {
         event.preventDefault();
         this.cancel();
-      } else if (event.key === 'Tab') {
-        event.preventDefault();
-        this.commit();
-        if (event.shiftKey) this.grid.moveCursor(row, col - 1);
-        else this.grid.moveCursor(row, col + 1);
       } else if (event.key === 'ArrowDown' && !event.altKey) {
         // Inside a multi-line value the arrows belong to the caret: pressing Down has to
         // move to the next line of the text, not to the cell below. Alt+Arrow is the way
@@ -544,8 +549,16 @@ export class CellEditor {
     const onKeyDown = (event) => {
       // A reused proxy keeps its listeners after the editor is gone (see openInput).
       if (!this.active || this.active.input !== input) return;
+      if (event.isComposing || event.keyCode === 229) {
+        event.stopPropagation();
+        return;
+      }
+      // Tab toggles the sidebar; commit first and let the event bubble (see openInput).
+      if (event.key === 'Tab' && !event.shiftKey) {
+        this.commit();
+        return;
+      }
       event.stopPropagation();
-      if (event.isComposing || event.keyCode === 229) return;
 
       const state = this.active;
       const matches = state ? state.refMatches || [] : [];
@@ -569,10 +582,6 @@ export class CellEditor {
       } else if (event.key === 'Escape') {
         event.preventDefault();
         this.cancel();
-      } else if (event.key === 'Tab') {
-        event.preventDefault();
-        this.commit();
-        this.grid.moveCursor(row, col + (event.shiftKey ? -1 : 1));
       }
     };
     input.addEventListener('keydown', onKeyDown);

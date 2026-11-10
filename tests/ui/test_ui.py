@@ -450,6 +450,56 @@ wait_for("__palacedb.grid.cellValue(%d,1) !== undefined" % target_row)
 after_undo = evaluate("__palacedb.grid.cellValue(%d,1).t" % target_row)
 check("paste undo restored the previous value", after_undo != src, after_undo)
 
+# --- a copied column lands in the column under the cursor, not back in its own column.
+# Two text columns are picked from whatever sample is open, because the paste has to
+# convert the values otherwise and this check is about placement.
+text_cols = json.loads(evaluate(
+    "JSON.stringify((() => { const c = __palacedb.grid.columns;"
+    " const a = c.findIndex(x => x.type === 'Text');"
+    " const b = c.findIndex((x, i) => i > a && x.type === 'Text'); return [a, b]; })())"))
+text_a, text_b = text_cols
+evaluate("__palacedb.grid.moveCursor(0,%d)" % text_a)
+evaluate("__palacedb.grid.moveCursor(2,%d,true)" % text_a)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'c',ctrlKey:true,bubbles:true}))")
+time.sleep(0.6)
+copied_column = json.loads(evaluate(
+    "JSON.stringify([0,1,2].map(r => __palacedb.grid.cellValue(r,%d).t))" % text_a))
+evaluate("__palacedb.grid.moveCursor(0,%d)" % text_b)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'v',ctrlKey:true,bubbles:true}))")
+time.sleep(1.0)
+wait_for("__palacedb.grid.cellValue(2,%d) !== undefined" % text_b)
+landed = json.loads(evaluate(
+    "JSON.stringify([0,1,2].map(r => __palacedb.grid.cellValue(r,%d).t))" % text_b))
+check("a copied column pastes into the column under the cursor", landed == copied_column,
+      (copied_column, landed))
+check("the column it was copied from is untouched",
+      json.loads(evaluate(
+          "JSON.stringify([0,1,2].map(r => __palacedb.grid.cellValue(r,%d).t))" % text_a))
+      == copied_column)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true}))")
+time.sleep(0.8)
+
+# --- Ctrl+Enter fills the block with the cursor cell's value (R5), without an editor
+evaluate("__palacedb.grid.moveCursor(0,%d)" % text_a)
+evaluate("__palacedb.grid.moveCursor(2,%d,true)" % text_a)
+time.sleep(0.3)
+fill_value = evaluate("__palacedb.grid.cellValue(2,%d).t" % text_a)
+evaluate("document.getElementById('gridBody').dispatchEvent("
+         "new KeyboardEvent('keydown', {key:'Enter', ctrlKey:true, bubbles:true}))")
+time.sleep(1.0)
+filled = json.loads(evaluate(
+    "JSON.stringify([0,1,2].map(r => __palacedb.grid.cellValue(r,%d).t))" % text_a))
+check("Ctrl+Enter fills the selection from the cursor cell", filled == [fill_value] * 3,
+      (fill_value, filled))
+check("Ctrl+Enter fills instead of opening the cell editor",
+      evaluate("!!document.querySelector('.editor-input')") is False)
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true}))")
+time.sleep(0.8)
+check("the fill is one undo step",
+      json.loads(evaluate(
+          "JSON.stringify([0,1,2].map(r => __palacedb.grid.cellValue(r,%d).t))" % text_a))
+      == copied_column)
+
 # --- row operations
 # The toolbar button appends, so the cursor is parked on the first row first: a new row
 # belongs at the end of the table, not above whatever the cursor happens to be on.
@@ -521,6 +571,30 @@ evaluate("__palacedb.send('undo')")
 time.sleep(1.0)
 check("undo restores the separator indices", current_separators() == sep_indices,
       (sep_indices, current_separators()))
+
+# --- dragging a row drags the separator that heads it. The dividers are cleared first so
+# the check has one divider it owns; both commands are undone at the end.
+for row in current_separators():
+    evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: %d})" % row)
+wait_for("__palacedb.grid.separatorTitles.size === 0", 5)
+
+evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 3})")
+check("a separator is prepared for the drag test",
+      wait_for("__palacedb.grid.separatorTitles.has(3)"), current_separators())
+
+evaluate("__palacedb.send('moveRow', {sheet: __palacedb.state.currentSheet, from: 3, to: 6})")
+check("dragging a row takes its separator with it",
+      wait_for("__palacedb.grid.separatorTitles.has(6) && !__palacedb.grid.separatorTitles.has(3)"),
+      current_separators())
+
+evaluate("__palacedb.send('undo')")
+check("undo puts the separator back on the dragged row",
+      wait_for("__palacedb.grid.separatorTitles.has(3) && !__palacedb.grid.separatorTitles.has(6)"),
+      current_separators())
+
+evaluate("__palacedb.send('undo')")
+check("the drag test cleans up after itself",
+      wait_for("__palacedb.grid.separatorTitles.size === 0"), current_separators())
 
 # --- column width is stored in the metadata side-car
 evaluate("__palacedb.grid.columns[1].width = 210; __palacedb.grid.onColumnResized(__palacedb.grid.sheet, __palacedb.grid.columns[1].name, 210)")
@@ -710,6 +784,54 @@ time.sleep(1.0)
 restored = evaluate("__palacedb.grid.cellValue(1,1) && __palacedb.grid.cellValue(1,1).t") or ""
 check("replace all: undo restores the cells", "ZZSEARCHA" in restored, restored)
 
+# --- the find inputs keep the platform copy / paste / undo shortcuts
+# The table's Ctrl handlers used to swallow them, so the fields could not be edited with
+# the keyboard. These are trusted key events, which is what exercises the native actions.
+def send_key(key_name, code, vk, modifiers=0):
+    for kind in ("keyDown", "keyUp"):
+        counter[0] += 1
+        ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchKeyEvent",
+                            "params": {"type": kind, "key": key_name, "code": code,
+                                       "windowsVirtualKeyCode": vk,
+                                       "nativeVirtualKeyCode": vk,
+                                       "modifiers": modifiers}}))
+
+
+def insert_text(text):
+    counter[0] += 1
+    ws.send(json.dumps({"id": counter[0], "method": "Input.insertText",
+                        "params": {"text": text}}))
+
+
+evaluate("document.getElementById('findInput').value = ''")
+evaluate("document.getElementById('findInput').focus()")
+insert_text("ABC")
+time.sleep(0.3)
+check("typing reaches the find field",
+      evaluate("document.getElementById('findInput').value") == "ABC")
+cell_before_ctrl = evaluate("__palacedb.grid.cellValue(0,1) && __palacedb.grid.cellValue(0,1).t")
+send_key("z", "KeyZ", 90, modifiers=2)
+time.sleep(0.5)
+check("Ctrl+Z undoes inside the find field",
+      evaluate("document.getElementById('findInput').value") == "",
+      evaluate("document.getElementById('findInput').value"))
+check("Ctrl+Z in the find field does not undo the document",
+      evaluate("__palacedb.grid.cellValue(0,1) && __palacedb.grid.cellValue(0,1).t") == cell_before_ctrl,
+      (cell_before_ctrl, evaluate("__palacedb.grid.cellValue(0,1) && __palacedb.grid.cellValue(0,1).t")))
+
+evaluate("document.getElementById('findInput').value = 'HELLO'")
+evaluate("document.getElementById('findInput').select()")
+send_key("c", "KeyC", 67, modifiers=2)
+time.sleep(0.3)
+evaluate("document.getElementById('findInput').value = ''")
+evaluate("document.getElementById('findInput').focus()")
+send_key("v", "KeyV", 86, modifiers=2)
+time.sleep(0.5)
+check("copy and paste work in the find field",
+      evaluate("document.getElementById('findInput').value") == "HELLO",
+      evaluate("document.getElementById('findInput').value"))
+
+evaluate("document.getElementById('findInput').value = ''")
 evaluate("__palacedb.closeFindBar()")
 time.sleep(0.3)
 check("find: the bar closes", evaluate("document.getElementById('findBar').hidden") is True)
@@ -1430,7 +1552,7 @@ check("the same button collapses and restores the list",
 check("the button keeps its exact screen position in both states",
       toggle and toggle["sameBox"] is True, toggle)
 
-# --- Tab toggles the table list outside the table
+# --- Tab toggles the table list everywhere, and never moves the cell cursor
 evaluate("document.getElementById('sidebarExpand').focus()")
 evaluate("document.activeElement.dispatchEvent("
          "new KeyboardEvent('keydown', {key:'Tab', bubbles:true}))")
@@ -1443,16 +1565,42 @@ time.sleep(0.4)
 check("Tab brings it back",
       evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is False)
 
-# Inside the table Tab still moves to the next cell, which is why it is not stolen there.
+# Inside the table Tab is the same shortcut: the cursor must not move to the next cell.
 evaluate("__palacedb.grid.moveCursor(1, 0)")
-before_col = evaluate("__palacedb.grid.cursor.col")
+cursor_before = evaluate("JSON.stringify(__palacedb.grid.cursor)")
+evaluate("document.getElementById('gridBody').dispatchEvent("
+         "new KeyboardEvent('keydown', {key:'Tab', bubbles:true}))")
+time.sleep(0.4)
+check("Tab inside the table toggles the table list",
+      evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is True)
+check("Tab inside the table leaves the cell cursor alone",
+      evaluate("JSON.stringify(__palacedb.grid.cursor)") == cursor_before,
+      (cursor_before, evaluate("JSON.stringify(__palacedb.grid.cursor)")))
 evaluate("document.getElementById('gridBody').dispatchEvent("
          "new KeyboardEvent('keydown', {key:'Tab', bubbles:true}))")
 time.sleep(0.3)
-check("Tab inside the table still moves between cells",
-      evaluate("__palacedb.grid.cursor.col") == before_col + 1
-      and evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is False,
-      (before_col, evaluate("__palacedb.grid.cursor.col")))
+
+# With an editor open, Tab commits the text, toggles the list and stays on the cell.
+evaluate("__palacedb.grid.moveCursor(1, 1)")
+evaluate("__palacedb.grid.onEditRequest(1, 1, '')")
+wait_for("!!document.querySelector('.editor-input')", 5)
+evaluate("(() => { const i = document.querySelector('.editor-input');"
+         " i.value = 'TAB_COMMIT'; return 1; })()")
+evaluate("document.querySelector('.editor-input').dispatchEvent("
+         "new KeyboardEvent('keydown', {key:'Tab', bubbles:true}))")
+time.sleep(0.5)
+check("Tab with an editor commits the value",
+      evaluate("__palacedb.grid.cellValue(1,1) && __palacedb.grid.cellValue(1,1).t") == "TAB_COMMIT",
+      evaluate("__palacedb.grid.cellValue(1,1) && __palacedb.grid.cellValue(1,1).t"))
+check("Tab with an editor still toggles the table list",
+      evaluate("document.getElementById('sidebar').classList.contains('collapsed')") is True)
+check("Tab with an editor does not move the cursor",
+      evaluate("__palacedb.grid.cursor.row === 1 && __palacedb.grid.cursor.col === 1"),
+      evaluate("JSON.stringify(__palacedb.grid.cursor)"))
+evaluate("document.body.dispatchEvent(new KeyboardEvent('keydown', {key:'z', ctrlKey:true, bubbles:true}))")
+time.sleep(0.6)
+evaluate("document.getElementById('sidebarExpand').click()")
+time.sleep(0.4)
 
 # --- the palette belongs to the file, so it is written to the side-car
 META = CDB + ".meta.json"
@@ -1736,16 +1884,84 @@ check("recent entry shows the file name and folder",
       and "Sprites.cdb" in (evaluate("(() => { const b = (%s)[0]; return b ? b.textContent : null; })()" % recent_paths) or ""),
       evaluate("(() => { const b = (%s)[0]; return b ? b.textContent : null; })()" % recent_paths))
 
-# Clicking the entry for the first database must switch this window back to it.
+# A recent entry opens in a window of its own: the database this window shows stays put.
+known_targets = {t["id"] for t in json.load(urllib.request.urlopen("http://127.0.0.1:9333/json/list"))}
+showing = evaluate("__palacedb.state.document && __palacedb.state.document.name")
 evaluate("""(() => {
   const button = Array.from(document.querySelectorAll('#recentMenu [data-action="openRecent"]'))
     .find(b => b.dataset.path.endsWith('TestData2.cdb'));
   if (button) button.click();
   return Boolean(button);
 })()""")
-ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'TestData2.cdb'", 20)
-check("clicking a recent entry opens that file", ok,
+ws_recent = None
+for _ in range(40):
+    time.sleep(0.5)
+    try:
+        pages = [t for t in json.load(urllib.request.urlopen("http://127.0.0.1:9333/json/list"))
+                 if t.get("type") == "page" and t["id"] not in known_targets]
+    except Exception:
+        pages = []
+    if pages:
+        try:
+            ws_recent = websocket.create_connection(pages[0]["webSocketDebuggerUrl"], timeout=15)
+            break
+        except Exception:
+            ws_recent = None
+check("clicking a recent entry opens a new window", ws_recent is not None)
+check("the window it came from keeps its own database",
+      evaluate("__palacedb.state.document && __palacedb.state.document.name") == showing,
       evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+
+if ws_recent is not None:
+    def wait_recent(expr, timeout=30):
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                if evaluate(expr, sock=ws_recent):
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.25)
+        return False
+
+    ok = wait_recent("!!(window.__palacedb && __palacedb.state.document "
+                     "&& __palacedb.state.document.name === 'TestData2.cdb')")
+    check("clicking a recent entry opens that file", ok,
+          evaluate("__palacedb.state.document && __palacedb.state.document.name", sock=ws_recent))
+
+    # That window holds the write slot now, so it is closed before the rest of the suite
+    # goes back to working in a single window.
+    evaluate("__palacedb.send('exit')", sock=ws_recent)
+    ws_recent.close()
+    time.sleep(2.5)
+
+evaluate("__palacedb.send('openPath', {path: %s})" % json.dumps(CDB))
+ok = wait_for("__palacedb.state.document && __palacedb.state.document.name === 'TestData2.cdb'", 20)
+check("the first database is back in this window", ok,
+      evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+check("and it is editable again once the other window is gone",
+      wait_for("__palacedb.state.document.readOnly === false", 15),
+      evaluate("__palacedb.state.document.readOnlyReason"))
+
+# The file this window already shows needs no second window.
+opened_windows = len([t for t in json.load(urllib.request.urlopen("http://127.0.0.1:9333/json/list"))
+                      if t.get("type") == "page"])
+evaluate("""(() => {
+  const button = Array.from(document.querySelectorAll('#recentMenu [data-action="openRecent"]'))
+    .find(b => b.dataset.path.endsWith('TestData2.cdb'));
+  if (button) button.click();
+  return Boolean(button);
+})()""")
+time.sleep(1.5)
+check("reopening the file this window shows adds no window",
+      len([t for t in json.load(urllib.request.urlopen("http://127.0.0.1:9333/json/list"))
+           if t.get("type") == "page"]) == opened_windows,
+      len([t for t in json.load(urllib.request.urlopen("http://127.0.0.1:9333/json/list"))
+           if t.get("type") == "page"]))
+check("and the user is told why nothing happened",
+      any("already open" in (toast or "") for toast in evaluate(
+          "Array.from(document.querySelectorAll('.toast')).map(t => t.textContent)") or []),
+      evaluate("Array.from(document.querySelectorAll('.toast')).map(t => t.textContent)"))
 
 settings_file = os.path.join(DATA_DIR, "settings.json")
 check("recent list persisted outside the project",
@@ -4211,6 +4427,52 @@ else:
               evaluate("__palacedb.state.document.dirty", sock=ws_b))
         evaluate("__palacedb.send('undo')", sock=ws_b)
         time.sleep(0.6)
+
+# --- starting without a file reopens the most recent database (F03)
+# The instance above has been opening files, so the recent list is populated. A launch
+# with no path on the command line has to pick the newest entry that still exists.
+ws.close()
+proc.terminate()
+time.sleep(1.0)
+
+with open(settings_file, encoding="utf-8") as handle:
+    remembered = json.load(handle).get("recentFiles") or []
+expected = next((p for p in remembered if os.path.exists(p)), None)
+check("the recent list survived the runs", expected is not None, remembered)
+
+proc = subprocess.Popen(
+    [EXE],
+    env=dict(os.environ, PALACEDB_CDP="9335", PALACEDB_AUTOMATION="1", PALACEDB_BACKUP_SECONDS="120"))
+ws = None
+for _ in range(60):
+    time.sleep(0.5)
+    park_windows(proc.pid)
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9335/json/list", timeout=2) as r:
+            targets = json.load(r)
+        pages = [t for t in targets if t.get("type") == "page"]
+        if pages:
+            ws = websocket.create_connection(pages[0]["webSocketDebuggerUrl"], timeout=15)
+            break
+    except Exception:
+        continue
+
+if ws is None:
+    check("start-up instance started", False, "no CDP target")
+else:
+    check("start-up instance started", True)
+    expected_name = os.path.basename(expected or "")
+    ok = wait_for("!!(window.__palacedb && __palacedb.state.document)", 25)
+    check("starting without a file opens a database", ok,
+          evaluate("__palacedb.state.document && __palacedb.state.document.name"))
+    check("it is the most recent one", evaluate(
+              "__palacedb.state.document && __palacedb.state.document.name") == expected_name,
+          (evaluate("__palacedb.state.document && __palacedb.state.document.name"), expected_name))
+
+    # The list the window was started with is the same one on disk.
+    check("its recent menu is populated",
+          wait_for("__palacedb.elements.recentMenu.querySelectorAll('[data-action=\"openRecent\"]').length >= 1", 10),
+          evaluate("__palacedb.elements.recentMenu.querySelectorAll('[data-action=\"openRecent\"]').length"))
 
 # --- no console errors
 ws.close()

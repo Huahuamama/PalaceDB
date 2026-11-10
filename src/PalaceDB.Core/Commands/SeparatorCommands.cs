@@ -138,6 +138,48 @@ internal static class SeparatorTitles
         return result;
     }
 
+    /// <summary>
+    /// Separator indices after a single row is dragged from <paramref name="from"/> to
+    /// <paramref name="to"/>. A divider heads the row it sits in front of, so it travels
+    /// with that row; every other divider keeps heading its own row, which means it shifts
+    /// by one when the dragged row crosses over it.
+    /// </summary>
+    public static List<(int Index, string? Title)> ForMove(
+        IReadOnlyList<(int Index, string? Title)> before,
+        int from,
+        int to)
+    {
+        if (from == to)
+            return before.ToList();
+
+        var result = new List<(int Index, string? Title)>(before.Count);
+
+        foreach (var pair in before)
+        {
+            var index = pair.Index;
+
+            if (index == from)
+            {
+                // The divider on the dragged row follows it.
+                index = to;
+            }
+            else if (from < to && index > from && index <= to)
+            {
+                // Dragged down: the rows it passed move up one, their dividers with them.
+                index--;
+            }
+            else if (to < from && index >= to && index < from)
+            {
+                // Dragged up: the rows it passed move down one.
+                index++;
+            }
+
+            result.Add((index, pair.Title));
+        }
+
+        return result;
+    }
+
     public static void Write(SheetData sheet, List<(int Index, string? Title)> pairs)
     {
         // The on-disk array is sorted, so the titles are sorted with it.

@@ -95,6 +95,10 @@ const grid = new Grid(
 
 const editor = new CellEditor(grid);
 
+// Ctrl+Enter with no editor open: fill the block with the cursor cell's own value. The
+// Edit menu lists the same action, so the shortcut has to work from the table too.
+grid.onFillRequest = () => runAction('fillSelection');
+
 // A resolved thumbnail only changes pixels, so the rows are redrawn in place; the open
 // dropdown is rebuilt too because it may be showing icons.
 onImagesLoaded(() => {
@@ -741,13 +745,16 @@ function runAction(action, arg) {
       break;
     case 'fillSelection': {
       // Without an open editor, fill the selection with the cursor cell's own value.
-      const data = grid.cellValue(grid.cursor.row, grid.cursor.col);
       if (!state.currentSheet) break;
+      const data = grid.cellValue(grid.cursor.row, grid.cursor.col);
+      // Nothing to copy from (the row is not on screen): filling with a blank would wipe
+      // the block instead of doing what was asked.
+      if (!data) break;
       send('fillCells', {
         sheet: state.currentSheet,
         rows: grid.selectedRowIndices(),
         columns: grid.selectedColumnNames(),
-        text: data ? data.t : '',
+        text: data.t,
       });
       break;
     }
@@ -2723,21 +2730,21 @@ elements.findClose.addEventListener('click', closeFindBar);
 // ---------------------------------------------------------------- shortcuts
 
 /**
- * Tab collapses the table list and Tab again brings it back.
- *
- * Inside the table Tab keeps its spreadsheet meaning (move to the next cell), and an
- * open cell editor needs it to commit, so the shortcut stays out of the table's way and
- * applies everywhere else - the table list itself, the toolbar, the welcome screen.
+ * Tab collapses the table list and Tab again brings it back — everywhere in the window.
+ * It no longer moves the cell cursor: a dialog or an open menu still keeps Tab for moving
+ * between its fields and items, and an open cell editor commits first so nothing typed is
+ * lost when the focus leaves.
  */
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Tab' || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
 
-  // Places where Tab has a job of its own: the table (next cell), a dialog (move to the
-  // next field), an open menu (move to the next item), and any text field.
+  // Dialogs and open menus need Tab to move between their fields and items.
   const target = event.target instanceof Element ? event.target : null;
-  if (target && target.closest('#grid, #modal, .menu-popup, input, select, textarea')) return;
+  if (target && target.closest('#modal, .menu-popup')) return;
 
   event.preventDefault();
+  // An editor under the grid writes its value first; the cursor does not move.
+  if (grid.isEditing()) editor.commit();
   toggleSidebar();
 });
 
@@ -2769,6 +2776,17 @@ document.addEventListener('keydown', (event) => {
   if (!event.ctrlKey) return;
 
   const key = event.key.toLowerCase();
+
+  // A text field keeps its own copy / cut / paste / undo / redo. The find and replace
+  // inputs used to lose all of them to the table's handlers. The grid proxy is excluded:
+  // it is an invisible composition target, not a field the user types in.
+  const target = event.target instanceof Element ? event.target : null;
+  const field = target && target.closest('input, textarea, select, [contenteditable="true"]');
+  if (field && !field.classList.contains('grid-proxy')
+      && ['c', 'x', 'v', 'z', 'y'].includes(key)) {
+    return;
+  }
+
   // A dialog field keeps its own Ctrl+F / Ctrl+H; the find bar is for the table.
   if (key === 'f') { if (modalOpen()) return; event.preventDefault(); openFindBar(false); }
   else if (key === 'h') { if (modalOpen()) return; event.preventDefault(); openFindBar(true); }

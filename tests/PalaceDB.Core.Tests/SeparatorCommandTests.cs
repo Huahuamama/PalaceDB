@@ -280,6 +280,85 @@ public class SeparatorCommandTests
         Assert.Equal(new[] { 1 }, sheet.Separators);
     }
 
+    // ---------------------------------------------------------------- row moves
+
+    [Fact]
+    public void DraggingARowCarriesItsSeparatorAlong()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+
+        new RowMoveCommand(sheet, 1, 2).Execute();
+
+        Assert.Equal(new[] { 2 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void DraggingARowDownMovesTheSeparatorItPassedUp()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 2).Execute();
+
+        // Row 0 goes below row 2, so the heading that was on row 2 now heads row 1.
+        new RowMoveCommand(sheet, 0, 2).Execute();
+
+        Assert.Equal(new[] { 1 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void DraggingARowUpMovesTheSeparatorItPassedDown()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+
+        new RowMoveCommand(sheet, 2, 0).Execute();
+
+        Assert.Equal(new[] { 2 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void DraggingARowWithoutASeparatorLeavesTheOtherHeadingsAlone()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 0).Execute();
+
+        new RowMoveCommand(sheet, 1, 2).Execute();
+
+        Assert.Equal(new[] { 0 }, sheet.Separators);
+    }
+
+    [Fact]
+    public void ATitleFollowsTheRowItWasDraggedWith()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+        new SeparatorTitleCommand(sheet, 1, "Group").Execute();
+
+        new RowMoveCommand(sheet, 1, 2).Execute();
+
+        var pairs = sheet.GetSeparators();
+        Assert.Single(pairs);
+        Assert.Equal(2, pairs[0].Index);
+        Assert.Equal("Group", pairs[0].Title);
+    }
+
+    [Fact]
+    public void MoveUndoRestoresTheSeparatorIndex()
+    {
+        var (db, sheet) = Sample();
+        new SeparatorToggleCommand(sheet, 1).Execute();
+        new SeparatorTitleCommand(sheet, 1, "Group").Execute();
+
+        var command = new RowMoveCommand(sheet, 1, 2);
+        command.Execute();
+        command.Undo();
+
+        var pairs = sheet.GetSeparators();
+        Assert.Single(pairs);
+        Assert.Equal(1, pairs[0].Index);
+        Assert.Equal("Group", pairs[0].Title);
+    }
+
     private static string[] Titles(SheetData sheet) =>
         sheet.GetSeparators().Select(p => p.Title ?? string.Empty).ToArray();
 }

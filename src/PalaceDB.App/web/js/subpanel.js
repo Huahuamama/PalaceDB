@@ -133,6 +133,8 @@ export class SubPanel {
     this.editor = new CellEditor(this.grid);
     this.grid.onColumnResized = null;
     this.grid.onClearRequest = () => this.clearSelection();
+    // Ctrl+Enter fills the block with the cell the cursor sits on, like the table above.
+    this.grid.onFillRequest = () => this.fillSelection();
     // The row numbers work here too: a list is a table, so its rows can be reordered by
     // dragging them, exactly like the rows of the table above.
     this.grid.onRowMove = (from, to) => this.moveRow(from, to);
@@ -289,6 +291,18 @@ export class SubPanel {
     for (const row of rowIndices) {
       for (const name of columnNames) this.setCell(row, name, text);
     }
+  }
+
+  /** Ctrl+Enter: copy the cursor cell's text into every cell of the selection. */
+  fillSelection() {
+    const { row, col } = this.grid.cursor;
+    const cell = this.rows[row] && this.rows[row][col];
+    if (!cell) return;
+    this.fillCells(
+      this.grid.selectedRowIndices(),
+      this.grid.selectedColumnNames(),
+      cell.t,
+    );
   }
 
   // ------------------------------------------------------------- rows

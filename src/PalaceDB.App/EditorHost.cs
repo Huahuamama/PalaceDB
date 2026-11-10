@@ -444,6 +444,12 @@ public sealed partial class EditorHost
     /// <summary>
     /// Opens an entry of the recent list. A remembered file that has since been deleted is
     /// dropped from the list instead of leaving a dead entry behind.
+    /// <para>
+    /// A recent file opens in a window of its own, so the database this window is showing
+    /// stays exactly as it was. An empty window has nothing to protect and simply takes the
+    /// file, and the file this window already shows needs no second window at all - two
+    /// windows on one database would only make one of them read-only.
+    /// </para>
     /// </summary>
     private void OpenRecent(string path)
     {
@@ -460,8 +466,43 @@ public sealed partial class EditorHost
             return;
         }
 
-        OpenDocument(path);
+        if (_document?.Path is { } current && SamePath(current, path))
+        {
+            SendToast($"'{Path.GetFileName(path)}' is already open in this window.", "info");
+            return;
+        }
+
+        if (_document is null)
+        {
+            OpenDocument(path);
+            return;
+        }
+
+        OpenInNewWindow(path);
+
+        // The new window records the file itself once it is loaded; doing it here as well
+        // keeps this window's menu in the right order straight away.
+        RememberRecent(path);
     }
+
+    /// <summary>
+    /// Opens a database in a new window. The new window inherits the remembered geometry of
+    /// its file, or a small offset from this window when it has none, so the two do not
+    /// overlap exactly.
+    /// </summary>
+    private void OpenInNewWindow(string path)
+    {
+        App.Current.Dispatcher.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.PlaceBeforeShow(MetaStore.ReadWindowState(path) ?? _window.CascadePlacement());
+            window.OpenFileWhenReady(path);
+            window.Show();
+        });
+    }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
     private void ClearRecent()
     {
@@ -1841,12 +1882,17 @@ public sealed partial class EditorHost
             }
         }
 
+        var skipped = 0;
         IEditorCommand? command = mode == "insert"
             ? PasteService.BuildInsert(sheet, row, clipboard, _document.Database)
-            : PasteService.BuildOverwrite(sheet, row, column, clipboard);
+            : PasteService.BuildOverwrite(sheet, row, column, clipboard, out skipped);
 
         if (command is null)
+        {
+            if (skipped > 0)
+                SendToast("Nothing was pasted: the values do not fit the target columns.", "warning");
             return;
+        }
 
         _document.Commands.Execute(command);
         // The two-argument overload parks the cursor on column 0: it is meant for row
@@ -1854,7 +1900,10 @@ public sealed partial class EditorHost
         // cell it was invoked on, so pass that column through — otherwise every Ctrl+V
         // throws the cursor back to the first cell of the row.
         RefreshAfterStructuralChange(sheet.Name, row, column);
-        SendToast(mode == "insert" ? "Rows inserted." : "Pasted.", "info");
+        if (skipped > 0)
+            SendToast($"Pasted, {skipped} cell(s) skipped: they do not fit the target column.", "warning");
+        else
+            SendToast(mode == "insert" ? "Rows inserted." : "Pasted.", "info");
     }
 
     private void InsertRow(JsonElement payload)

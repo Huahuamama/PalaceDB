@@ -78,6 +78,7 @@ export class Grid {
     // Wired by the application once the editor exists.
     this.onEditRequest = null;
     this.onToggleRequest = null;
+    this.onFillRequest = null;
     this.onClearRequest = null;
     this.onContextMenu = null;
     this.onGutterMenu = null;
@@ -1511,16 +1512,16 @@ export class Grid {
         else this.moveCursor(this.cursor.row, this.columns.length - 1, extend);
         break;
       case 'Tab':
-        if (event.shiftKey) {
-          if (this.cursor.col === 0) this.moveCursor(this.cursor.row - 1, this.columns.length - 1);
-          else this.moveCursor(this.cursor.row, this.cursor.col - 1);
-        } else if (this.cursor.col === this.columns.length - 1) {
-          this.moveCursor(this.cursor.row + 1, 0);
-        } else {
-          this.moveCursor(this.cursor.row, this.cursor.col + 1);
-        }
+        // Tab belongs to the sidebar toggle now, not to the cell cursor. Leave the
+        // event unhandled so it bubbles to the document-level shortcut.
+        handled = false;
         break;
       case 'Enter':
+        // Ctrl+Enter fills the selection with the cursor cell's value (R5). Without this
+        // the Edit menu advertises a shortcut that only works while a cell editor is open.
+        if (event.ctrlKey && this.onFillRequest) this.onFillRequest();
+        else if (this.onEditRequest) this.onEditRequest(this.cursor.row, this.cursor.col);
+        break;
       case 'F2':
         if (this.onEditRequest) this.onEditRequest(this.cursor.row, this.cursor.col);
         break;
