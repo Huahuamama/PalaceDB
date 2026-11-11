@@ -456,6 +456,22 @@ html, body {
 .form-sub-row .form-input:first-child { flex: 1 1 auto; }
 .form-sub-row .form-input { flex: 0 0 130px; }
 .form-sub-row .sub-remove { flex: 0 0 auto; }
+/* A sub-field enum or flag lists its values on a line of its own, under the row that
+   holds its name, its type and the buttons. */
+.form-sub-values {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 2px;
+}
+
+.form-sub-values span {
+  flex: 0 0 52px;
+  color: var(--text-dim);
+  font-size: var(--font-size-small);
+}
+
+.form-sub-values input { flex: 1 1 auto; }
 
 .form-sub-empty {
   margin: 0;

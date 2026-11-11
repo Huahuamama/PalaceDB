@@ -993,10 +993,10 @@ function openSubMenu(anchor, items, onPick) {
   subMenu.style.top = top + 'px';
 }
 
-/** Shows a menu at the pointer. */
-function showContextMenu(x, y, items) {
+/** Shows a menu at the pointer. `onPick` defaults to the application's own actions. */
+function showContextMenu(x, y, items, onPick) {
   hideContextMenu();
-  buildMenuInto(contextMenu, items, (item) => runAction(item.action, item.arg));
+  buildMenuInto(contextMenu, items, onPick || ((item) => runAction(item.action, item.arg)));
 
   contextMenu.hidden = false;
 
@@ -1278,6 +1278,32 @@ function isStructuredType(typeStr) {
   return ['8', '17', '21'].includes(String(typeStr || '').split(':')[0]);
 }
 
+/**
+ * Splits a stored type string into its numeric id and its payload: "5:A,B" is enum 5 with
+ * the values "A,B", "6:Items" a reference to Items. Keeping the two apart is what lets a
+ * field keep its enum values while its row is being edited.
+ */
+function splitTypeStr(typeStr) {
+  const text = typeStr === undefined || typeStr === null ? '' : String(typeStr);
+  const colon = text.indexOf(':');
+  return colon < 0
+    ? { id: text, payload: '' }
+    : { id: text.slice(0, colon), payload: text.slice(colon + 1) };
+}
+
+/** The type string a field of a sub-table is stored as. */
+function subTypeString(field) {
+  const parts = splitTypeStr(field.type);
+  if (parts.id === '5' || parts.id === '10') {
+    const values = field.values === undefined ? parts.payload : field.values;
+    return parts.id + ':' + values;
+  }
+  if (parts.id === '6') {
+    return '6:' + (field.refSheet === undefined ? parts.payload : field.refSheet);
+  }
+  return parts.id;
+}
+
 /** Builds the small form used by "add column", "rename column" and "change type". */
 function buildColumnForm(initial, options = {}) {
   const showName = options.showName !== false;
@@ -1336,14 +1362,15 @@ function buildColumnForm(initial, options = {}) {
 
   // A List or Properties column is backed by a hidden sub-table; its fields are edited
   // here rather than in a second dialog. `id` keeps the original name so renaming a
-  // field carries its values over instead of looking like remove + add.
+  // field carries its values over instead of looking like remove + add, and `type` keeps
+  // the whole stored string so an enum's values survive the round trip — splitting the
+  // payload off here is what used to flatten every sub-field enum to "5:".
   const subState = (initial.sub || []).map((field) => {
     const typeStr = String(field.type || field.typeStr || '1');
     return {
       id: field.id || field.name || '',
       name: field.name || '',
-      type: typeStr.split(':')[0],
-      refSheet: typeStr.split(':')[1] || '',
+      type: typeStr,
     };
   });
 
@@ -1454,6 +1481,11 @@ function buildColumnForm(initial, options = {}) {
         nameInput.addEventListener('input', () => { field.name = nameInput.value; });
         line.appendChild(nameInput);
 
+        // The stored type is "id" or "id:payload" (an enum's values, a reference's table).
+        // Keeping the two apart is what lets an enum field keep its values through a
+        // round trip of this dialog instead of being flattened to an empty enum.
+        const parts = splitTypeStr(field.type);
+
         const fieldType = document.createElement('select');
         fieldType.className = 'form-input';
         for (const type of SUB_TYPES) {
@@ -1462,14 +1494,36 @@ function buildColumnForm(initial, options = {}) {
           option.textContent = type.label;
           fieldType.appendChild(option);
         }
-        fieldType.value = SUB_TYPES.some((type) => type.value === field.type) ? field.type : '1';
+        fieldType.value = SUB_TYPES.some((type) => type.value === parts.id) ? parts.id : '1';
         fieldType.addEventListener('change', () => {
           field.type = fieldType.value;
           renderSubRows();
         });
         line.appendChild(fieldType);
 
-        if (field.type === '6') {
+        // The values of an enum or a flag get a line of their own: the row already holds a
+        // name, a type and three buttons, and a list of words squeezed between them was
+        // unreadable.
+        let valuesLine = null;
+        if (parts.id === '5' || parts.id === '10') {
+          valuesLine = document.createElement('div');
+          valuesLine.className = 'form-sub-values';
+
+          const caption = document.createElement('span');
+          caption.textContent = 'Values';
+          valuesLine.appendChild(caption);
+
+          const values = document.createElement('input');
+          values.type = 'text';
+          values.className = 'form-input sub-values';
+          values.placeholder = 'One, Two, Three';
+          values.title = 'The values this field offers, separated by commas';
+          values.value = field.values === undefined ? parts.payload : field.values;
+          values.addEventListener('input', () => { field.values = values.value; });
+          valuesLine.appendChild(values);
+        }
+
+        if (parts.id === '6') {
           const targetSelect = document.createElement('select');
           targetSelect.className = 'form-input';
           const sheets = state.document ? state.document.sheets : [];
@@ -1479,7 +1533,7 @@ function buildColumnForm(initial, options = {}) {
             option.textContent = sheet.name;
             targetSelect.appendChild(option);
           }
-          if (!field.refSheet && sheets.length > 0) field.refSheet = sheets[0].name;
+          if (!field.refSheet) field.refSheet = parts.payload || (sheets[0] ? sheets[0].name : '');
           targetSelect.value = field.refSheet;
           targetSelect.addEventListener('change', () => { field.refSheet = targetSelect.value; });
           line.appendChild(targetSelect);
@@ -1518,6 +1572,7 @@ function buildColumnForm(initial, options = {}) {
         line.appendChild(remove);
 
         subRowsBox.appendChild(line);
+        if (valuesLine) subRowsBox.appendChild(valuesLine);
       });
     }
 
@@ -1630,7 +1685,7 @@ function buildColumnForm(initial, options = {}) {
       .map((field) => ({
         id: field.id || '',
         name: field.name.trim(),
-        type: field.type === '6' ? `6:${field.refSheet || ''}` : field.type,
+        type: subTypeString(field),
       }))
       .filter((field) => field.name.length > 0),
     localizable: () => (localizableInput ? localizableInput.checked : false),
@@ -1798,8 +1853,140 @@ function promptEditColumn(columnOverride, sheetOverride) {
   });
 }
 
-function confirmDeleteColumn() {
-  const column = currentColumn();
+/**
+ * Edits one field of a List / Properties sub-table, from the panel's header menu.
+ *
+ * A sub-field is a column of the hidden table, so the whole field list is what gets sent
+ * back; `index` says where the edited (or inserted) one belongs. This dialog is also the
+ * only place a sub-field's enum or flag values can be given a list of their own.
+ */
+function promptEditSubField({ sheet, row, column, fields, index, isNew }) {
+  const list = fields.map((field) => ({ name: field.name, type: field.type }));
+  const initial = isNew ? { name: '', type: '1' } : list[index];
+  if (!initial) return;
+
+  // Inserting keeps every field; editing replaces the one at `index`.
+  const others = isNew ? list.slice() : list.filter((_, i) => i !== index);
+
+  let nameInput = null;
+  let typeSelect = null;
+  let valuesInput = null;
+  let valuesRow = null;
+  let tableSelect = null;
+  let tableRow = null;
+
+  openModal({
+    title: isNew ? `Insert a column in '${column}'` : `Edit column '${initial.name}'`,
+    okLabel: isNew ? 'Insert' : 'Apply',
+    build: () => {
+      const wrap = document.createElement('div');
+      wrap.className = 'form';
+      const parts = splitTypeStr(initial.type);
+
+      const nameRow = document.createElement('label');
+      nameRow.className = 'form-row';
+      const nameCaption = document.createElement('span');
+      nameCaption.textContent = 'Name';
+      nameRow.appendChild(nameCaption);
+      nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'form-input';
+      nameInput.placeholder = 'field';
+      nameInput.value = initial.name;
+      nameRow.appendChild(nameInput);
+      wrap.appendChild(nameRow);
+
+      const typeRow = document.createElement('label');
+      typeRow.className = 'form-row';
+      const typeCaption = document.createElement('span');
+      typeCaption.textContent = 'Type';
+      typeRow.appendChild(typeCaption);
+      typeSelect = document.createElement('select');
+      typeSelect.className = 'form-input';
+      for (const type of SUB_TYPES) {
+        const option = document.createElement('option');
+        option.value = type.value;
+        option.textContent = type.label;
+        typeSelect.appendChild(option);
+      }
+      typeSelect.value = SUB_TYPES.some((type) => type.value === parts.id) ? parts.id : '1';
+      typeRow.appendChild(typeSelect);
+      wrap.appendChild(typeRow);
+
+      valuesRow = document.createElement('label');
+      valuesRow.className = 'form-row';
+      const valuesCaption = document.createElement('span');
+      valuesCaption.textContent = 'Values';
+      valuesRow.appendChild(valuesCaption);
+      valuesInput = document.createElement('input');
+      valuesInput.type = 'text';
+      valuesInput.className = 'form-input';
+      valuesInput.placeholder = 'One, Two, Three';
+      valuesInput.value = parts.payload;
+      valuesRow.appendChild(valuesInput);
+      wrap.appendChild(valuesRow);
+
+      const valuesHint = document.createElement('p');
+      valuesHint.className = 'form-hint values-hint';
+      valuesHint.textContent =
+        'Leave an entry blank for a value with no label: ",1,2" keeps an unnamed first value.';
+      wrap.appendChild(valuesHint);
+
+      tableRow = document.createElement('label');
+      tableRow.className = 'form-row';
+      const tableCaption = document.createElement('span');
+      tableCaption.textContent = 'Table';
+      tableRow.appendChild(tableCaption);
+      tableSelect = document.createElement('select');
+      tableSelect.className = 'form-input';
+      const sheets = state.document ? state.document.sheets : [];
+      for (const sheet of sheets) {
+        const option = document.createElement('option');
+        option.value = sheet.name;
+        option.textContent = sheet.name;
+        tableSelect.appendChild(option);
+      }
+      if (parts.payload) tableSelect.value = parts.payload;
+      tableRow.appendChild(tableSelect);
+      wrap.appendChild(tableRow);
+
+      const sync = () => {
+        const id = typeSelect.value;
+        const values = id === '5' || id === '10';
+        valuesRow.hidden = !values;
+        valuesHint.hidden = !values;
+        tableRow.hidden = id !== '6';
+      };
+      typeSelect.addEventListener('change', sync);
+      sync();
+
+      return wrap;
+    },
+    onOk: () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        toast('The column needs a name.', 'error');
+        return false;
+      }
+      if (others.some((field) => field.name === name)) {
+        toast(`'${name}' is already a field of this list.`, 'error');
+        return false;
+      }
+
+      const id = typeSelect.value;
+      let type = id;
+      if (id === '5' || id === '10') type = id + ':' + valuesInput.value;
+      else if (id === '6') type = '6:' + (tableSelect.value || '');
+
+      const next = others.slice();
+      next.splice(Math.max(0, Math.min(index, next.length)), 0, { name, type });
+      send('setSubFields', { sheet, row, column, fields: next });
+      return true;
+    },
+  });
+}
+
+function confirmDeleteColumn() {  const column = currentColumn();
   if (!column) return;
 
   openModal({
@@ -2396,6 +2583,26 @@ function showSubValueEditor(payload) {
     grid,
     send,
     closePanel,
+    // The panel's right-click menus are built where the actions live: it asks for a menu
+    // at a point, and every entry carries its own callback.
+    menu: (x, y, items) => showContextMenu(x, y, items, (item) => {
+      if (item.onSelect) item.onSelect();
+    }),
+    confirm: ({ title, message, okLabel, onOk }) => openModal({
+      title,
+      okLabel,
+      build: () => {
+        const text = document.createElement('p');
+        text.style.margin = '0';
+        text.textContent = message;
+        return text;
+      },
+      onOk: () => {
+        onOk();
+        return true;
+      },
+    }),
+    promptSubField: (options) => promptEditSubField(options),
     promptFields: (sheet, columnName) => {
       const column = grid.columns.find((item) => item.name === columnName);
       if (column) promptEditColumn(column, sheet);

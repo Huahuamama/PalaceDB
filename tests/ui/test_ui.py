@@ -3240,6 +3240,160 @@ ok = wait_for("(__palacedb.grid.cellValue(1,%d) || {}).t && __palacedb.grid.cell
 check("a reference inside a list can be picked", ok,
       evaluate("__palacedb.grid.cellValue(1,%d) && __palacedb.grid.cellValue(1,%d).t" % (list_col, list_col)))
 
+# --- right-click menus inside the sub-table
+# A list is a table, so it gets the same menus as the table above: values on a cell,
+# fields on a header, records on a row number.
+def sub_menu_labels():
+    return evaluate(
+        "Array.from(document.querySelectorAll('#contextMenu .context-item span'))"
+        ".map(s => s.textContent).join('|')")
+
+
+def sub_menu_click(label):
+    evaluate("""(() => {
+      const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+        .find(i => i.textContent.indexOf(%s) === 0);
+      if (item) item.click();
+      return Boolean(item);
+    })()""" % json.dumps(label))
+    time.sleep(0.9)
+
+
+def sub_context_menu(selector):
+    return evaluate("""(() => {
+      const c = document.querySelector(%s);
+      if (!c) return false;
+      c.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, clientX: 320, clientY: 320}));
+      return true;
+    })()""" % json.dumps(selector))
+
+
+def sub_headers():
+    return evaluate(
+        "Array.from(document.querySelectorAll('.sub-expansion .sub-head .head-cell'))"
+        ".map(c => c.textContent).join('|')")
+
+
+sub_context_menu('.sub-expansion .sub-body .cell[data-row="0"][data-col="0"]')
+check("right click inside the sub-table opens a menu",
+      evaluate("!document.getElementById('contextMenu').hidden"))
+labels = sub_menu_labels()
+check("the sub-table cell menu is about the value",
+      "Cut" in labels and "Copy" in labels and "Clear Cells" in labels, labels)
+evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))")
+time.sleep(0.3)
+
+# The header menu edits the fields of the list, including the values of an enum.
+sub_context_menu('.sub-expansion .sub-head .head-cell[data-col="1"]')
+labels = sub_menu_labels()
+check("right click on a sub-table header opens the column menu",
+      "Edit Column" in labels and "Insert Column" in labels and "Delete Column" in labels, labels)
+sub_menu_click("Insert Column")
+check("the new field dialog asks for a name and a type",
+      evaluate("!document.getElementById('modal').hidden")
+      and evaluate("document.getElementById('modalTitle').textContent").startswith("Insert a column"),
+      evaluate("document.getElementById('modalTitle').textContent"))
+evaluate("""(() => {
+  const rows = document.querySelectorAll('#modal .form-row');
+  const name = rows[0].querySelector('input');
+  name.value = 'level';
+  name.dispatchEvent(new Event('input', {bubbles: true}));
+  const type = rows[1].querySelector('select');
+  type.value = '5';
+  type.dispatchEvent(new Event('change', {bubbles: true}));
+  return true;
+})()""")
+time.sleep(0.4)
+evaluate("""(() => {
+  const rows = document.querySelectorAll('#modal .form-row');
+  const values = rows[2].querySelector('input');
+  values.value = 'A,B,C';
+  values.dispatchEvent(new Event('input', {bubbles: true}));
+  return values.value;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("document.querySelectorAll('.sub-expansion .sub-head .head-cell').length === 3", 12)
+check("the field is added to the list", ok, sub_headers())
+check("it is an enum", "levelEnum" in (sub_headers() or ""), sub_headers())
+
+# The enum field offers the values it was given, and a pick lands in the record.
+check("double click on the new enum field opens its values",
+      click_sub_cell(0, 2, twice=True)
+      and evaluate("!!document.querySelector('.sub-expansion .cell-dropdown')") is True)
+check("the values are the ones that were typed",
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .cell-dropdown .dropdown-item'))"
+               ".map(i => i.textContent).join(',')") == "A,B,C",
+      evaluate("Array.from(document.querySelectorAll('.sub-expansion .cell-dropdown .dropdown-item'))"
+               ".map(i => i.textContent).join(',')"))
+evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('.sub-expansion .cell-dropdown .dropdown-item'))
+    .find(i => i.textContent === 'B');
+  if (item) item.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+  return Boolean(item);
+})()""")
+ok = wait_for("(() => { const c = document.querySelector('.sub-expansion .sub-body "
+              ".cell[data-row=\"0\"][data-col=\"2\"]'); return c && c.textContent === 'B'; })()", 10)
+check("the picked value is shown in the record", ok,
+      evaluate("(() => { const c = document.querySelector('.sub-expansion .sub-body "
+               ".cell[data-row=\"0\"][data-col=\"2\"]'); return c ? c.textContent : null; })()"))
+evaluate("document.body.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))")
+time.sleep(0.4)
+
+# The Fields... dialog is the other way into the same definition, and it must keep the
+# values an enum field already has instead of flattening it to an empty enum.
+evaluate("""(() => {
+  const button = Array.from(document.querySelectorAll('.sub-expansion .sub-tool'))
+    .find(b => b.textContent.indexOf('Fields') >= 0);
+  if (button) button.click();
+  return Boolean(button);
+})()""")
+time.sleep(0.8)
+check("the field list shows the enum values",
+      evaluate("Array.from(document.querySelectorAll('#modal .form-sub-values input'))"
+               ".some(i => i.value === 'A,B,C')"),
+      evaluate("Array.from(document.querySelectorAll('#modal .form-sub-values input'))"
+               ".map(i => i.value).join('|')"))
+evaluate("document.getElementById('modalOk').click()")
+time.sleep(1.2)
+check("applying the field list keeps the values",
+      "levelEnum" in (sub_headers() or ""), sub_headers())
+
+# Move and delete a field through the header menu.
+sub_context_menu('.sub-expansion .sub-head .head-cell[data-col="2"]')
+sub_menu_click("Move Column Left")
+ok = wait_for("(() => { const h = Array.from(document.querySelectorAll("
+              "'.sub-expansion .sub-head .head-cell')).map(c => c.textContent);"
+              " return h[1] === 'levelEnum'; })()", 12)
+check("a field can be moved left", ok, sub_headers())
+
+sub_context_menu('.sub-expansion .sub-head .head-cell[data-col="1"]')
+sub_menu_click("Delete Column")
+check("deleting a field asks first",
+      evaluate("!document.getElementById('modal').hidden")
+      and evaluate("document.getElementById('modalTitle').textContent").startswith("Delete column"),
+      evaluate("document.getElementById('modalTitle').textContent"))
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("document.querySelectorAll('.sub-expansion .sub-head .head-cell').length === 2", 12)
+check("the field is gone", ok, sub_headers())
+
+# The row numbers offer the record operations. A field edit re-sends the whole document,
+# so the panel has just been refreshed: let that land before touching its rows.
+time.sleep(1.5)
+sub_context_menu('.sub-expansion .sub-gutter .gutter-cell[data-row="0"]')
+labels = sub_menu_labels()
+check("right click on a sub-table row number opens the row menu",
+      "Insert Row Above" in labels and "Delete Row" in labels, labels)
+rows_before = evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length")
+sub_menu_click("Insert Row Below")
+ok = wait_for("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length === %d"
+              % (rows_before + 1), 10)
+check("the row menu adds a record", ok,
+      evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length"))
+# The panel writes on a short timer, so the row has to land before it is undone.
+time.sleep(1.2)
+evaluate("__palacedb.send('undo')")
+time.sleep(1.0)
+
 # A row can be added from the panel and it grows with it.
 rows_before = evaluate("document.querySelectorAll('.sub-expansion .sub-body .grid-row').length")
 height_before = evaluate("Math.round(document.querySelector('.sub-expansion').getBoundingClientRect().height)")

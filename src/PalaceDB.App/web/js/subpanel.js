@@ -138,6 +138,145 @@ export class SubPanel {
     // The row numbers work here too: a list is a table, so its rows can be reordered by
     // dragging them, exactly like the rows of the table above.
     this.grid.onRowMove = (from, to) => this.moveRow(from, to);
+    // Right-click behaves like it does above: the cell menu is about values, the header
+    // menu about the fields, the row-number menu about the records.
+    this.grid.onContextMenu = ({ header, x, y }) => this.showCellMenu(header, x, y);
+    this.grid.onGutterMenu = ({ row, x, y }) => this.showRowMenu(row, x, y);
+  }
+
+  // ------------------------------------------------------------- context menus
+
+  /** Menu for a cell (values) or for a column header (the field itself). */
+  showCellMenu(isHeader, x, y) {
+    if (!this.app.menu) return;
+    const col = this.grid.cursor.col;
+    const field = this.fields[col];
+    if (!field) return;
+
+    if (isHeader) {
+      this.app.menu(x, y, [
+        { label: 'Edit Column...', onSelect: () => this.editField(col) },
+        { label: 'Insert Column...', onSelect: () => this.insertField(col + 1) },
+        'sep',
+        { label: 'Move Column Left', disabled: col === 0, onSelect: () => this.moveField(col, -1) },
+        {
+          label: 'Move Column Right',
+          disabled: col === this.fields.length - 1,
+          onSelect: () => this.moveField(col, 1),
+        },
+        'sep',
+        {
+          label: 'Delete Column',
+          // A list without fields has nowhere to put a value, so the last one stays.
+          disabled: this.fields.length <= 1,
+          onSelect: () => this.deleteField(col),
+        },
+      ]);
+      return;
+    }
+
+    this.app.menu(x, y, [
+      { label: 'Cut', shortcut: 'Ctrl+X', onSelect: () => this.copySelection(true) },
+      { label: 'Copy', shortcut: 'Ctrl+C', onSelect: () => this.copySelection(false) },
+      { label: 'Paste', shortcut: 'Ctrl+V', disabled: !this.clipboard, onSelect: () => this.paste() },
+      'sep',
+      { label: 'Clear Cells', shortcut: 'Del', onSelect: () => this.clearSelection() },
+      { label: 'Select All', shortcut: 'Ctrl+A', onSelect: () => this.grid.selectAll() },
+    ]);
+  }
+
+  /** Menu for a row number: the records of the list, in the order they are stored. */
+  showRowMenu(row, x, y) {
+    if (!this.app.menu) return;
+    const count = this.grid.selectedRowIndices().length;
+    this.app.menu(x, y, [
+      { label: 'Insert Row Above', onSelect: () => this.addRow(row - 1) },
+      { label: 'Insert Row Below', onSelect: () => this.addRow(row) },
+      'sep',
+      {
+        label: count > 1 ? `Delete ${count} Rows` : 'Delete Row',
+        disabled: this.kind !== 'list',
+        onSelect: () => this.removeRow(),
+      },
+    ]);
+  }
+
+  // ------------------------------------------------------------- fields
+
+  /** The field list as the document stores it: a name and an encoded type each. */
+  fieldList() {
+    return this.fields.map((field) => ({ name: field.name, type: fieldTypeStr(field) }));
+  }
+
+  /** Hands a new field list to the host, which rewrites the sub-table in one undo step. */
+  applyFields(list) {
+    // A cell edit may still be waiting on its timer; it has to land before the fields do,
+    // or it would be written back in the old shape.
+    this.flush();
+    this.app.send('setSubFields', {
+      sheet: this.sheet,
+      row: this.row,
+      column: this.column,
+      fields: list,
+    });
+  }
+
+  editField(index) {
+    if (!this.app.promptSubField) return;
+    this.app.promptSubField({
+      sheet: this.sheet,
+      row: this.row,
+      column: this.column,
+      fields: this.fieldList(),
+      index,
+      isNew: false,
+    });
+  }
+
+  insertField(index) {
+    if (!this.app.promptSubField) return;
+    this.app.promptSubField({
+      sheet: this.sheet,
+      row: this.row,
+      column: this.column,
+      fields: this.fieldList(),
+      index,
+      isNew: true,
+    });
+  }
+
+  moveField(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= this.fields.length) return;
+
+    const list = this.fieldList();
+    const [field] = list.splice(index, 1);
+    list.splice(target, 0, field);
+    this.applyFields(list);
+  }
+
+  deleteField(index) {
+    if (this.fields.length <= 1) return;
+
+    const name = this.fields[index].name;
+    const remove = () => {
+      const list = this.fieldList();
+      list.splice(index, 1);
+      this.applyFields(list);
+    };
+
+    if (!this.app.confirm) {
+      remove();
+      return;
+    }
+
+    this.app.confirm({
+      title: `Delete column '${name}'?`,
+      message: 'The values stored in this field are removed from every record of the list. '
+        + 'This can be undone with Ctrl+Z.',
+      okLabel: 'Delete',
+      onOk: remove,
+    });
   }
 
   /** Delete clears the selected cells of the sub-table, like it does above. */
@@ -351,6 +490,15 @@ export class SubPanel {
     if (!event.ctrlKey || this.editor.active) return;
 
     const key = event.key.toLowerCase();
+
+    // Select All belongs to the panel while it has the keyboard, not to the table above.
+    if (key === 'a') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.grid.selectAll();
+      return;
+    }
+
     if (key !== 'c' && key !== 'x' && key !== 'v') return;
 
     event.preventDefault();
@@ -361,6 +509,11 @@ export class SubPanel {
       return;
     }
 
+    this.copySelection(key === 'x');
+  }
+
+  /** Puts the selected block on the panel's clipboard; `cut` empties the cells after. */
+  copySelection(cut) {
     const bounds = this.grid.selectionBounds();
     const block = [];
     for (let row = bounds.top; row <= bounds.bottom; row += 1) {
@@ -372,16 +525,16 @@ export class SubPanel {
     }
     this.clipboard = block;
 
-    if (key === 'x') {
-      for (let row = bounds.top; row <= bounds.bottom; row += 1) {
-        for (let col = bounds.left; col <= bounds.right; col += 1) {
-          if (this.rows[row] && this.rows[row][col]) this.rows[row][col] = { t: '', v: '' };
-        }
+    if (!cut) return;
+
+    for (let row = bounds.top; row <= bounds.bottom; row += 1) {
+      for (let col = bounds.left; col <= bounds.right; col += 1) {
+        if (this.rows[row] && this.rows[row][col]) this.rows[row][col] = { t: '', v: '' };
       }
-      this.grid.cache.clear();
-      this.grid.invalidate();
-      this.commit();
     }
+    this.grid.cache.clear();
+    this.grid.invalidate();
+    this.commit();
   }
 
   paste() {
@@ -485,6 +638,21 @@ export class SubPanel {
 }
 
 /**
+ * The encoded type of one field, which is how a new field list is sent back to the host.
+ * An enum or a flag carries its values in that string, so they travel with the field.
+ */
+function fieldTypeStr(field) {
+  switch (field.type) {
+    case 'Enum':
+      return '5:' + (field.values || []).join(',');
+    case 'Flags':
+      return '10:' + (field.values || []).join(',');
+    default:
+      return field.typeStr || '';
+  }
+}
+
+/**
  * What the grid should print for a raw value. The host formats a fresh payload, so this
  * only has to cover what an edit produces until the answer comes back.
  */
@@ -494,6 +662,14 @@ function displayOf(field, value) {
       if (value === 'true') return 'Y';
       if (value === 'false') return 'N';
       return value;
+    case 'Flags':
+      // The editor reports the chosen names separated by commas, the table shows them
+      // separated by a bar; until the host answers, the cell has to say the same thing.
+      return String(value || '')
+        .split(',')
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0)
+        .join('|');
     case 'Color':
       return colorText(value);
     default:

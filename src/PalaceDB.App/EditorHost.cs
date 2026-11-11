@@ -317,6 +317,10 @@ public sealed partial class EditorHost
                 SetSubValue(payload);
                 break;
 
+            case "setSubFields":
+                SetSubFields(payload);
+                break;
+
             case "addSheet":
                 AddSheet(payload);
                 break;
@@ -2618,6 +2622,89 @@ public sealed partial class EditorHost
         type is ColumnType.Text or ColumnType.Id or ColumnType.Int or ColumnType.Float
             or ColumnType.Bool or ColumnType.Enum or ColumnType.Flags or ColumnType.Color
             or ColumnType.Image or ColumnType.File or ColumnType.Guid or ColumnType.Ref;
+
+    /// <summary>
+    /// Rewrites the field list of the sub-table behind a List or Properties column.
+    /// <para>
+    /// The header menu of the panel renames, retypes, reorders, inserts and removes one
+    /// field at a time, but all of those are the same operation from the document's point
+    /// of view - a new field list - so the host only needs this one message. It is also the
+    /// only way to give a sub-field an enum or a flag its own values, which the panel's
+    /// "Edit Column..." needs.
+    /// </para>
+    /// </summary>
+    private void SetSubFields(JsonElement payload)
+    {
+        if (_document is null)
+            return;
+
+        var sheet = _document.Database.GetSheet(GetString(payload, "sheet"));
+        if (sheet is null)
+            return;
+
+        var rowIndex = GetInt(payload, "row");
+        if (rowIndex < 0 || rowIndex >= sheet.Lines.Count)
+            return;
+
+        var column = sheet.GetColumn(GetString(payload, "column"));
+        if (column is null)
+            return;
+
+        if (_document.IsReadOnly)
+        {
+            SendError("This file is read-only.");
+            return;
+        }
+
+        var sub = sheet.GetSub(column);
+        if (sub is null)
+            return;
+
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("fields", out var fields) ||
+            fields.ValueKind != JsonValueKind.Array)
+            return;
+
+        var specs = new List<SubColumnSpec>();
+        foreach (var item in fields.EnumerateArray())
+        {
+            var name = GetString(item, "name").Trim();
+            if (name.Length == 0)
+                continue;
+
+            if (specs.Any(spec => string.Equals(spec.Name, name, StringComparison.Ordinal)))
+            {
+                SendError($"'{name}' is used twice in the field list.");
+                return;
+            }
+
+            if (!TryDecodeType(GetString(item, "type"), out var type))
+                return;
+
+            specs.Add(new SubColumnSpec(name, type));
+        }
+
+        if (specs.Count == 0)
+        {
+            SendError("A list needs at least one field.");
+            return;
+        }
+
+        var command = new SubColumnsCommand(_document.Database, sub, sheet, column, specs);
+        if (command.IsNoOp)
+            return;
+
+        _document.Commands.Execute(command);
+        CommitColumnEdit(sheet);
+
+        // The field list lives in the document: the column dialog reads the fields of a
+        // list from the hidden sub-tables, so a stale document would let that dialog apply
+        // the old list and quietly drop the field that was just added. Sending the document
+        // also refreshes every open panel against the new header.
+        SendRowUpdated(sheet, rowIndex);
+        SendDocument();
+        SendDirty();
+    }
 
     /// <summary>Writes the edited rows back into a List or Properties cell as one undo step.</summary>
     private void SetSubValue(JsonElement payload)
