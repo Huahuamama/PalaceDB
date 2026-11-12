@@ -90,6 +90,14 @@
         <button class="sidebar-toggle" id="addTable" type="button" title="Add a table">+</button>
       </div>
       <div class="table-list" id="tableList"></div>
+      <!-- Public enum / flags types: one value list several columns can share, so a
+           change here reaches every column that follows it. -->
+      <div class="sidebar-header public-header">
+        <span class="sidebar-title">Public Types</span>
+        <button class="sidebar-toggle" id="addPublicType" type="button"
+                title="Add a public enum or flags type">+</button>
+      </div>
+      <div class="public-list" id="publicList"></div>
       <div class="sidebar-rail" id="sidebarRail" title="Expand the table list">Tables</div>
     </aside>
 

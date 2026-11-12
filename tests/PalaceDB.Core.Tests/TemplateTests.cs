@@ -549,14 +549,14 @@ public class TemplateTests : IDisposable
     }
 
     [Fact]
-    public void TheSideCarIsVersionTwo()
+    public void TheSideCarRecordsItsVersion()
     {
         var (database, store) = Build();
         store.CreateTemplate("Item", TemplateSpec.Snapshot(database.GetSheet("Items")!));
         store.Save(force: true);
 
         var text = File.ReadAllText(store.Path2);
-        Assert.Contains("\"metaVersion\": 2", text);
+        Assert.Contains($"\"metaVersion\": {MetaDocument.CurrentVersion}", text);
         Assert.Contains("\"templates\"", text);
     }
 

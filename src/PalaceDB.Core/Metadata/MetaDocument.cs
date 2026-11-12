@@ -22,6 +22,41 @@ public sealed class ColumnMeta
 
     [JsonPropertyName("width")]
     public double? Width { get; set; }
+
+    /// <summary>
+    /// Name of the public enum/flags type this column is bound to. A bound column still
+    /// carries its own <c>typeStr</c> in the .cdb (all bound columns spell the type the
+    /// same way); this is what makes the link survive and lets one edit reach them all.
+    /// </summary>
+    [JsonPropertyName("publicType")]
+    public string? PublicType { get; set; }
+
+    /// <summary>
+    /// True when the column is an integer that numbers new rows by itself. The flag lives
+    /// here rather than in the .cdb, so the column stays a plain Int column for CastleDB.
+    /// </summary>
+    [JsonPropertyName("autoIncrement")]
+    public bool? AutoIncrement { get; set; }
+}
+
+/// <summary>
+/// A named enum or flags definition shared by several columns. The values are copied into
+/// every bound column's <c>typeStr</c>, so the .cdb stays a plain CastleDB file; this entry
+/// is the source of truth the copies are kept equal to.
+/// </summary>
+public sealed class PublicTypeMeta
+{
+    /// <summary>Either <c>"enum"</c> or <c>"flags"</c>.</summary>
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "enum";
+
+    [JsonPropertyName("values")]
+    public List<string> Values { get; set; } = new();
+
+    [JsonIgnore]
+    public bool IsFlags => string.Equals(Kind, "flags", StringComparison.OrdinalIgnoreCase);
+
+    public PublicTypeMeta Clone() => new() { Kind = Kind, Values = new List<string>(Values) };
 }
 
 public sealed class TableMeta
@@ -101,11 +136,11 @@ public sealed class AppearanceMeta
 public sealed class MetaDocument
 {
     /// <summary>
-    /// Bumped to 2 when table templates were added. A side-car of a newer version is
-    /// treated as read-only by an older build, which is what keeps it from silently
-    /// dropping the <c>templates</c> block it does not understand.
+    /// Bumped to 3 when public enum/flags types were added. A side-car of a newer version
+    /// is treated as read-only by an older build, which is what keeps it from silently
+    /// dropping the <c>publicTypes</c> block it does not understand.
     /// </summary>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     [JsonPropertyName("metaVersion")]
     public int MetaVersion { get; set; } = CurrentVersion;
@@ -122,6 +157,10 @@ public sealed class MetaDocument
     /// <summary>Table templates of this file, keyed by an id that survives renames.</summary>
     [JsonPropertyName("templates")]
     public Dictionary<string, TemplateMeta> Templates { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>Named enum/flags definitions that several columns can share.</summary>
+    [JsonPropertyName("publicTypes")]
+    public Dictionary<string, PublicTypeMeta> PublicTypes { get; set; } = new(StringComparer.Ordinal);
 
     [JsonPropertyName("windowState")]
     public WindowState WindowState { get; set; } = new();
@@ -233,6 +272,13 @@ public sealed class MetaDocument
         foreach (var table in Tables.Values)
             if (table.Template is { } templateId && !Templates.ContainsKey(templateId))
                 table.Template = null;
+
+        // The same goes for a column bound to a public type that is gone: the column
+        // keeps its own values, it just stops claiming to follow a definition.
+        foreach (var table in Tables.Values)
+            foreach (var column in table.Columns.Values)
+                if (column.PublicType is { } publicType && !PublicTypes.ContainsKey(publicType))
+                    column.PublicType = null;
     }
 
     /// <summary>Stable metadata id of a column, or null when unknown.</summary>
@@ -276,5 +322,83 @@ public sealed class MetaDocument
             return;
         Tables.Remove(oldName);
         Tables[newName] = table;
+    }
+
+    // ---- public enum / flags types -------------------------------------
+
+    public PublicTypeMeta? GetPublicType(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return null;
+        return PublicTypes.TryGetValue(name, out var type) ? type : null;
+    }
+
+    /// <summary>Every (table, column) pair bound to a public type, in document order.</summary>
+    public List<(string Sheet, string Column)> ColumnsBoundTo(string typeName)
+    {
+        var found = new List<(string, string)>();
+        foreach (var table in Tables)
+            foreach (var column in table.Value.Columns.Values)
+                if (string.Equals(column.PublicType, typeName, StringComparison.Ordinal))
+                    found.Add((table.Key, column.Name));
+        return found;
+    }
+
+    public string? GetColumnPublicType(string sheetName, string columnName)
+    {
+        var id = FindColumnId(sheetName, columnName);
+        if (id is null || !Tables.TryGetValue(sheetName, out var table))
+            return null;
+        return table.Columns[id].PublicType;
+    }
+
+    public void SetColumnPublicType(string sheetName, string columnName, string? typeName)
+    {
+        var id = FindColumnId(sheetName, columnName);
+        if (id is null || !Tables.TryGetValue(sheetName, out var table))
+            return;
+        table.Columns[id].PublicType = string.IsNullOrEmpty(typeName) ? null : typeName;
+    }
+
+    public bool IsAutoIncrement(string sheetName, string columnName)
+    {
+        var id = FindColumnId(sheetName, columnName);
+        if (id is null || !Tables.TryGetValue(sheetName, out var table))
+            return false;
+        return table.Columns[id].AutoIncrement == true;
+    }
+
+    public void SetAutoIncrement(string sheetName, string columnName, bool value)
+    {
+        var id = FindColumnId(sheetName, columnName);
+        if (id is null || !Tables.TryGetValue(sheetName, out var table))
+            return;
+        table.Columns[id].AutoIncrement = value ? true : null;
+    }
+
+    /// <summary>Renames a public type and every binding that points at it.</summary>
+    public void RenamePublicType(string oldName, string newName)
+    {
+        if (string.Equals(oldName, newName, StringComparison.Ordinal))
+            return;
+        if (!PublicTypes.TryGetValue(oldName, out var type))
+            return;
+        PublicTypes.Remove(oldName);
+        PublicTypes[newName] = type;
+
+        foreach (var table in Tables.Values)
+            foreach (var column in table.Columns.Values)
+                if (string.Equals(column.PublicType, oldName, StringComparison.Ordinal))
+                    column.PublicType = newName;
+    }
+
+    /// <summary>Forgets a public type; the columns keep the values they already carry.</summary>
+    public void DropPublicType(string name)
+    {
+        PublicTypes.Remove(name);
+        foreach (var table in Tables.Values)
+            foreach (var column in table.Columns.Values)
+                if (string.Equals(column.PublicType, name, StringComparison.Ordinal))
+                    column.PublicType = null;
     }
 }

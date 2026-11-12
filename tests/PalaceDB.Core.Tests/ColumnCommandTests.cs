@@ -260,6 +260,83 @@ public class ColumnCommandTests
     }
 
     [Fact]
+    public void AnIdColumnCanComeBackAfterTheOldOneIsDeleted()
+    {
+        var (db, sheet) = Sample();
+        var idColumn = sheet.IdColumn!;
+        var index = sheet.Columns.IndexOf(idColumn);
+
+        var delete = ColumnOps.Build(sheet, new DeleteColumnOp(idColumn.Name), db);
+        Assert.NotNull(delete);
+        delete!.Execute();
+        Assert.Null(sheet.IdColumn);
+
+        var spec = new ColumnSpec { Name = "id", TypeStr = "0" };
+        var insert = ColumnOps.Build(sheet, new InsertColumnOp("id", index, spec), db, fillInsertedRows: true);
+        Assert.NotNull(insert);
+        insert!.Execute();
+
+        Assert.NotNull(sheet.IdColumn);
+        Assert.Equal("id", sheet.IdColumn!.Name);
+        Assert.Equal(0, sheet.Columns.IndexOf(sheet.IdColumn));
+    }
+
+    [Fact]
+    public void ATableNeverGetsASecondIdColumn()
+    {
+        var (db, sheet) = Sample();
+        Assert.NotNull(sheet.IdColumn);
+
+        var spec = new ColumnSpec { Name = "other", TypeStr = "0" };
+        var insert = ColumnOps.Build(sheet, new InsertColumnOp("other", 0, spec), db, fillInsertedRows: true);
+
+        Assert.Null(insert);
+    }
+
+    [Fact]
+    public void AColumnCannotBeRetypedIntoASecondIdColumn()
+    {
+        var (db, sheet) = Sample();
+        Assert.NotNull(sheet.IdColumn);
+
+        var spec = new ColumnSpec { Name = "name", TypeStr = "0" };
+        var retype = ColumnOps.Build(sheet, new RetypeColumnOp("name", spec), db);
+
+        Assert.Null(retype);
+    }
+
+    [Fact]
+    public void AColumnCanBecomeTheIdColumnOnceTheOldOneIsGone()
+    {
+        var (db, sheet) = Sample();
+        ColumnOps.Build(sheet, new DeleteColumnOp("id"), db)!.Execute();
+        Assert.Null(sheet.IdColumn);
+
+        var spec = new ColumnSpec { Name = "name", TypeStr = "0" };
+        var retype = ColumnOps.Build(sheet, new RetypeColumnOp("name", spec), db);
+        Assert.NotNull(retype);
+        retype!.Execute();
+
+        Assert.Equal("name", sheet.IdColumn!.Name);
+    }
+
+    [Fact]
+    public void ANewIdColumnLeavesExistingRowsWithoutAnIdentifier()
+    {
+        var (db, sheet) = Sample();
+        var delete = ColumnOps.Build(sheet, new DeleteColumnOp("id"), db);
+        delete!.Execute();
+
+        var spec = new ColumnSpec { Name = "id", TypeStr = "0" };
+        ColumnOps.Build(sheet, new InsertColumnOp("id", 0, spec), db, fillInsertedRows: true)!.Execute();
+
+        // Empty strings in every row would look like identifiers nobody typed; a row
+        // without one is reported by the status bar and is the author's to fill in.
+        foreach (var row in sheet.Lines)
+            Assert.False(row.ContainsKey("id"));
+    }
+
+    [Fact]
     public void AMissingValueStaysMissing()
     {
         Assert.Null(ValueConverter.Convert(null, new ColumnType.Int(), new CdbValue.Number(0, null)));

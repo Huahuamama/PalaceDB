@@ -19,6 +19,8 @@ const elements = {
   sidebarExpand: document.getElementById('sidebarExpand'),
   addTable: document.getElementById('addTable'),
   tableList: document.getElementById('tableList'),
+  addPublicType: document.getElementById('addPublicType'),
+  publicList: document.getElementById('publicList'),
   grid: document.getElementById('grid'),
   gridHeadScroll: document.getElementById('gridHeadScroll'),
   gridHead: document.getElementById('gridHead'),
@@ -1253,6 +1255,9 @@ modal.root.addEventListener('keydown', (event) => {
 // ---------------------------------------------------------------- column schema
 
 const COLUMN_TYPES = [
+  // A table normally arrives with an id column, but one can be deleted on purpose; the
+  // type stays in the list so it can be added back.
+  { value: '0', label: 'Id (primary key)' },
   { value: '1', label: 'Text' },
   { value: '3', label: 'Int' },
   { value: '4', label: 'Float' },
@@ -1270,8 +1275,9 @@ const COLUMN_TYPES = [
   { value: '16', label: 'Dynamic' },
 ];
 
-// Types a field of a list may have: a list inside a list has no usable editor.
-const SUB_TYPES = COLUMN_TYPES.filter((type) => !['8', '17', '21'].includes(type.value));
+// Types a field of a list may have: a list inside a list has no usable editor, and an id
+// belongs to the row of a real table, not to a record inside one.
+const SUB_TYPES = COLUMN_TYPES.filter((type) => !['0', '8', '17', '21'].includes(type.value));
 
 /** True for the types that are backed by a hidden sub-table. */
 function isStructuredType(typeStr) {
@@ -1349,6 +1355,11 @@ function buildColumnForm(initial, options = {}) {
   let valuesRow = null;
   let valuesInput = null;
   let valuesHint = null;
+  let publicRow = null;
+  let publicSelect = null;
+  let publicHint = null;
+  let autoRow = null;
+  let autoInput = null;
   let refRow = null;
   let refSelect = null;
   let optionalInput = null;
@@ -1391,6 +1402,25 @@ function buildColumnForm(initial, options = {}) {
     }
     row.appendChild(typeSelect);
     wrap.appendChild(row);
+
+    // A public type is the one place its values are edited: choosing it here makes the
+    // column follow the definition instead of keeping a private copy of the list.
+    publicRow = document.createElement('label');
+    publicRow.className = 'form-row';
+    const publicCaption = document.createElement('span');
+    publicCaption.textContent = 'Public type';
+    publicRow.appendChild(publicCaption);
+
+    publicSelect = document.createElement('select');
+    publicSelect.className = 'form-input';
+    publicRow.appendChild(publicSelect);
+    wrap.appendChild(publicRow);
+
+    publicHint = document.createElement('p');
+    publicHint.className = 'form-hint';
+    publicHint.textContent =
+      'The values come from the public type. Edit them in the Public Types list to change every column that uses it.';
+    wrap.appendChild(publicHint);
 
     valuesRow = document.createElement('label');
     valuesRow.className = 'form-row';
@@ -1586,6 +1616,37 @@ function buildColumnForm(initial, options = {}) {
 
     renderSubRows();
 
+    // Options for the public type picker: every named enum / flags of the file, plus
+    // "none" so a column can be detached from a definition again.
+    const publicTypes = publicTypesOfDocument();
+    const noneOption = document.createElement('option');
+    noneOption.value = '';
+    noneOption.textContent = '\u2014 none \u2014';
+    publicSelect.appendChild(noneOption);
+    for (const type of publicTypes) {
+      const option = document.createElement('option');
+      option.value = type.name;
+      option.textContent = `${type.name} (${type.kind === 'flags' ? 'flags' : 'enum'})`;
+      publicSelect.appendChild(option);
+    }
+    publicSelect.value = initial.publicType && publicTypes.some((t) => t.name === initial.publicType)
+      ? initial.publicType
+      : '';
+
+    publicSelect.addEventListener('change', () => {
+      const chosen = publicTypes.find((type) => type.name === publicSelect.value);
+      if (!chosen) {
+        valuesInput.disabled = false;
+        sync();
+        return;
+      }
+      // The definition decides the kind and the values; the column only follows it.
+      typeSelect.value = chosen.kind === 'flags' ? '10' : '5';
+      valuesInput.value = (chosen.values || []).join(',');
+      valuesInput.disabled = true;
+      sync();
+    });
+
     typeSelect.value = COLUMN_TYPES.some((t) => t.value === base) ? base : '1';
 
     const sync = () => {
@@ -1594,9 +1655,17 @@ function buildColumnForm(initial, options = {}) {
       valuesHint.style.display = value === '5' || value === '10' ? '' : 'none';
       refRow.style.display = value === '6' ? '' : 'none';
       subRow.hidden = !isStructuredType(value);
+      publicRow.hidden = publicTypes.length === 0;
+      const bound = Boolean(publicSelect.value);
+      publicHint.hidden = !bound;
+      valuesInput.disabled = bound;
       syncOptions(value);
     };
-    typeSelect.addEventListener('change', sync);
+    typeSelect.addEventListener('change', () => {
+      // Leaving enum / flags detaches the column: a public type describes a value list.
+      if (typeSelect.value !== '5' && typeSelect.value !== '10') publicSelect.value = '';
+      sync();
+    });
     sync();
   }
 
@@ -1609,6 +1678,8 @@ function buildColumnForm(initial, options = {}) {
   function syncOptions(value) {
     if (displayRow) displayRow.hidden = !(value === '3' || value === '4');
     if (localizableRow) localizableRow.hidden = !(value === '1' || value === '0');
+    // Only an integer column can number its own rows.
+    if (autoRow) autoRow.hidden = value !== '3';
     if (defaultInput) {
       defaultInput.placeholder = defaultPlaceholder(value);
     }
@@ -1672,6 +1743,21 @@ function buildColumnForm(initial, options = {}) {
     localizableRow.appendChild(localizableText);
     wrap.appendChild(localizableRow);
 
+    // An integer column can number the rows it lives in: every new or inserted row takes
+    // one more than the highest number already there.
+    autoRow = document.createElement('label');
+    autoRow.className = 'form-row form-check';
+
+    autoInput = document.createElement('input');
+    autoInput.type = 'checkbox';
+    autoInput.checked = Boolean(initial.autoIncrement);
+    autoRow.appendChild(autoInput);
+
+    const autoText = document.createElement('span');
+    autoText.textContent = 'Auto-increment — new rows get the next number (1, 2, 3 ...)';
+    autoRow.appendChild(autoText);
+    wrap.appendChild(autoRow);
+
     syncOptions(currentType());
   }
 
@@ -1689,6 +1775,8 @@ function buildColumnForm(initial, options = {}) {
       }))
       .filter((field) => field.name.length > 0),
     localizable: () => (localizableInput ? localizableInput.checked : false),
+    publicType: () => (publicSelect ? publicSelect.value : ''),
+    autoIncrement: () => Boolean(autoInput && autoInput.checked),
     type: () => {
       if (!typeSelect) return typeStr;
       const value = typeSelect.value;
@@ -1780,6 +1868,8 @@ function promptAddColumn() {
         default: form.defaultValue(),
         display: form.display(),
         localizable: form.localizable(),
+        publicType: form.publicType(),
+        autoIncrement: form.autoIncrement(),
         sub,
       });
       return true;
@@ -1816,6 +1906,8 @@ function promptEditColumn(columnOverride, sheetOverride) {
       defaultValue: column.defaultValue,
       display: column.display,
       localizable: column.localizable,
+      publicType: column.publicType || '',
+      autoIncrement: Boolean(column.autoIncrement),
       sub: initialSub,
     }, { note: templateNote(sheetName) })).node,
     onOk: () => {
@@ -1846,6 +1938,8 @@ function promptEditColumn(columnOverride, sheetOverride) {
         default: form.defaultValue(),
         display: form.display(),
         localizable: form.localizable(),
+        publicType: form.publicType(),
+        autoIncrement: form.autoIncrement(),
         sub,
       });
       return true;
@@ -3033,6 +3127,7 @@ document.addEventListener('keydown', (event) => {
 
 function renderTableList() {
   elements.tableList.innerHTML = '';
+  renderPublicList();
 
   if (!state.document) return;
 
@@ -3064,9 +3159,196 @@ function renderTableList() {
   }
 }
 
+// ---------------------------------------------------------------- public types
+
+/** The public enum / flags types of the open file, as the sidebar shows them. */
+function publicTypesOfDocument() {
+  return (state.document && state.document.publicTypes) || [];
+}
+
+/**
+ * Lists the public types under the table list. A type is a named value list several
+ * columns share: the count next to it says how many follow it, and its tooltip names
+ * them, so the effect of an edit is visible before it is made.
+ */
+function renderPublicList() {
+  elements.publicList.innerHTML = '';
+  if (!state.document) return;
+
+  const types = publicTypesOfDocument();
+  if (types.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'public-empty';
+    empty.textContent = 'None yet \u2014 + adds one.';
+    elements.publicList.appendChild(empty);
+    return;
+  }
+
+  for (const type of types) {
+    const item = document.createElement('div');
+    item.className = 'public-item';
+    item.dataset.publicType = type.name;
+
+    const name = document.createElement('span');
+    name.className = 'public-name';
+    name.textContent = type.name;
+    item.appendChild(name);
+
+    const kind = document.createElement('span');
+    kind.className = 'public-kind';
+    kind.textContent = type.kind === 'flags' ? 'flags' : 'enum';
+    item.appendChild(kind);
+
+    const columns = type.columns || [];
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = String(columns.length);
+    count.title = columns.length === 0
+      ? 'Not used by any column yet'
+      : columns.map((entry) => `${entry.sheet}.${entry.column}`).join('\n');
+    item.appendChild(count);
+
+    item.addEventListener('click', () => promptPublicType(type));
+    item.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showContextMenu(event.clientX, event.clientY, [
+        { label: 'Edit Values...', action: 'editPublicType' },
+        { label: 'Delete', action: 'deletePublicType' },
+      ], (menuItem) => {
+        if (menuItem.action === 'editPublicType') promptPublicType(type);
+        else confirmDeletePublicType(type);
+      });
+    });
+
+    elements.publicList.appendChild(item);
+  }
+}
+
+/**
+ * The one dialog that creates a public type or edits an existing one: its name, whether
+ * it is an enum or a set of flags, and its values. Applying it is one undoable step that
+ * reaches every column bound to it.
+ */
+function promptPublicType(existing) {
+  const wrap = document.createElement('div');
+  wrap.className = 'form';
+
+  const nameRow = document.createElement('label');
+  nameRow.className = 'form-row';
+  const nameCaption = document.createElement('span');
+  nameCaption.textContent = 'Name';
+  nameRow.appendChild(nameCaption);
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'form-input';
+  nameInput.placeholder = 'Rarity';
+  nameInput.value = existing ? existing.name : '';
+  nameRow.appendChild(nameInput);
+  wrap.appendChild(nameRow);
+
+  const kindRow = document.createElement('label');
+  kindRow.className = 'form-row';
+  const kindCaption = document.createElement('span');
+  kindCaption.textContent = 'Kind';
+  kindRow.appendChild(kindCaption);
+
+  const kindSelect = document.createElement('select');
+  kindSelect.className = 'form-input';
+  for (const [value, label] of [['enum', 'Enum (one value)'], ['flags', 'Flags (bit set)']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    kindSelect.appendChild(option);
+  }
+  kindSelect.value = existing && existing.kind === 'flags' ? 'flags' : 'enum';
+  kindRow.appendChild(kindSelect);
+  wrap.appendChild(kindRow);
+
+  const valuesRow = document.createElement('label');
+  valuesRow.className = 'form-row';
+  const valuesCaption = document.createElement('span');
+  valuesCaption.textContent = 'Values';
+  valuesRow.appendChild(valuesCaption);
+
+  const valuesInput = document.createElement('input');
+  valuesInput.type = 'text';
+  valuesInput.className = 'form-input';
+  valuesInput.placeholder = 'One, Two, Three';
+  valuesInput.value = existing ? (existing.values || []).join(',') : '';
+  valuesRow.appendChild(valuesInput);
+  wrap.appendChild(valuesRow);
+
+  const hint = document.createElement('p');
+  hint.className = 'form-hint';
+  hint.textContent =
+    'Leave an entry blank for a value with no label. Every column that uses this type gets these values.';
+  wrap.appendChild(hint);
+
+  if (existing && existing.columns && existing.columns.length > 0) {
+    const users = document.createElement('p');
+    users.className = 'form-hint';
+    users.textContent = `Used by ${existing.columns
+      .map((entry) => `${entry.sheet}.${entry.column}`)
+      .join(', ')}.`;
+    wrap.appendChild(users);
+  }
+
+  openModal({
+    title: existing ? `Public type '${existing.name}'` : 'New public type',
+    okLabel: existing ? 'Apply' : 'Create',
+    build: () => wrap,
+    onOk: () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        toast('The type needs a name.', 'error');
+        return false;
+      }
+
+      const values = valuesInput.value.split(',').map((value) => value.trim());
+      if (values.every((value) => value.length === 0)) {
+        toast('At least one value is needed.', 'error');
+        return false;
+      }
+
+      send('savePublicType', {
+        name,
+        kind: kindSelect.value,
+        values: values.join(','),
+        renameFrom: existing ? existing.name : '',
+      });
+      return true;
+    },
+  });
+}
+
+/** Deletes a public type; the columns keep the values they already carry. */
+function confirmDeletePublicType(type) {
+  const users = (type.columns || []).length;
+  const body = document.createElement('div');
+  body.className = 'form';
+
+  const text = document.createElement('p');
+  text.className = 'form-hint';
+  text.textContent = users === 0
+    ? `Delete the public type '${type.name}'?`
+    : `Delete the public type '${type.name}'? The ${users} column(s) using it keep their values and become independent.`;
+  body.appendChild(text);
+
+  openModal({
+    title: 'Delete public type',
+    okLabel: 'Delete',
+    build: () => body,
+    onOk: () => {
+      send('deletePublicType', { name: type.name });
+      return true;
+    },
+  });
+}
+
 /** One line describing the template a table follows, for a tooltip. */
-function templateTooltip(sheet) {
-  const columns = sheet.templateColumns || 0;
+function templateTooltip(sheet) {  const columns = sheet.templateColumns || 0;
   const members = sheet.templateMembers || 1;
   const parts = [
     `Template: ${sheet.templateName}`,
@@ -3410,6 +3692,11 @@ elements.gridAddTable.addEventListener('click', () => runAction('addTable'));
 elements.addTable.addEventListener('click', (event) => {
   event.stopPropagation();
   promptAddTable();
+});
+
+elements.addPublicType.addEventListener('click', (event) => {
+  event.stopPropagation();
+  promptPublicType(null);
 });
 
 // Right-clicking a table selects it and offers the table operations.

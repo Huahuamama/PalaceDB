@@ -2136,7 +2136,7 @@ evaluate("""(() => {
   if (item) item.click();
   return Boolean(item);
 })()""")
-ok = wait_for("!document.getElementById('modal').hidden && document.querySelectorAll('#modal .form-check').length === 2", 10)
+ok = wait_for("!document.getElementById('modal').hidden && document.querySelectorAll('#modal .form-check').length >= 3", 10)
 check("edit column dialog opens", ok,
       evaluate("document.querySelectorAll('#modal .form-row').length"))
 check("edit column dialog has a name field and a type list",
@@ -4158,7 +4158,7 @@ with open(PAL_META, encoding="utf-8") as handle:
 tpl_ids = list((tpl_meta.get("templates") or {}).keys())
 check("the template is stored in the side-car, not in the .cdb", len(tpl_ids) == 1, list(tpl_meta.keys()))
 check("the side-car is written in the version that knows templates",
-      tpl_meta.get("metaVersion") == 2, tpl_meta.get("metaVersion"))
+      tpl_meta.get("metaVersion") == 3, tpl_meta.get("metaVersion"))
 check("the table records which template it follows",
       bool(tpl_ids) and (tpl_meta.get("tables") or {}).get(TPL_SHEET, {}).get("template") == tpl_ids[0],
       (tpl_meta.get("tables") or {}).get(TPL_SHEET, {}).get("template"))
@@ -4581,6 +4581,175 @@ else:
               evaluate("__palacedb.state.document.dirty", sock=ws_b))
         evaluate("__palacedb.send('undo')", sock=ws_b)
         time.sleep(0.6)
+
+# --- public enum / flags types: one definition, many columns
+# Two columns of the current table are given the same value list and then bound to a
+# public type, so that changing the type has to reach both of them.
+sheet = evaluate("__palacedb.state.currentSheet")
+evaluate("__palacedb.send('addColumn', {sheet: %r, index: 0, name: 'ptOne', type: '5:A,B,C'})" % sheet)
+time.sleep(1.2)
+evaluate("__palacedb.send('addColumn', {sheet: %r, index: 1, name: 'ptTwo', type: '5:A,B,C'})" % sheet)
+time.sleep(1.2)
+
+evaluate("document.getElementById('addPublicType').click()")
+time.sleep(0.6)
+check("the sidebar opens a public type dialog",
+      evaluate("document.getElementById('modalTitle').textContent") == "New public type",
+      evaluate("document.getElementById('modalTitle').textContent"))
+evaluate("""(() => {
+  const inputs = document.querySelectorAll('#modal .form-row input[type=text]');
+  inputs[0].value = 'PT';
+  inputs[0].dispatchEvent(new Event('input', {bubbles: true}));
+  inputs[1].value = 'A,B,C';
+  inputs[1].dispatchEvent(new Event('input', {bubbles: true}));
+  return inputs.length;
+})()""")
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("Array.from(document.querySelectorAll('#publicList .public-item'))"
+              ".some(i => i.dataset.publicType === 'PT')", 12)
+check("a new public type is listed in the sidebar", ok,
+      evaluate("document.getElementById('publicList').textContent"))
+
+# Binding through the column dialog: the values come from the definition.
+evaluate("__palacedb.grid.moveCursor(0, 0)")
+evaluate("__palacedb.grid.onContextMenu({row: 0, column: 0, header: true, x: 200, y: 110})")
+time.sleep(0.5)
+evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+    .find(b => b.textContent.indexOf('Edit Column') >= 0);
+  if (item) item.click();
+  return Boolean(item);
+})()""")
+time.sleep(0.6)
+check("the column dialog offers the public type",
+      evaluate("Array.from(document.querySelectorAll('#modal select')[1].options)"
+               ".some(o => o.value === 'PT')"),
+      evaluate("Array.from(document.querySelectorAll('#modal select')[1].options)"
+               ".map(o => o.value).join('|')"))
+evaluate("""(() => {
+  const select = document.querySelectorAll('#modal select')[1];
+  select.value = 'PT';
+  select.dispatchEvent(new Event('change', {bubbles: true}));
+  return select.value;
+})()""")
+check("choosing a public type locks the value list",
+      evaluate("document.querySelectorAll('#modal .form-row input[type=text]')[1].disabled"),
+      evaluate("document.querySelectorAll('#modal .form-row input[type=text]')[1].value"))
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("__palacedb.state.document.sheets.find(s => s.name === %r).columns[0].publicType === 'PT'" % sheet, 12)
+check("the column follows the public type", ok,
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === %r).columns[0].publicType" % sheet))
+
+evaluate("__palacedb.send('editColumn', {sheet: %r, column: 'ptTwo', name: 'ptTwo',"
+         " type: '5:A,B,C', publicType: 'PT'})" % sheet)
+time.sleep(1.2)
+check("a second column can follow the same type",
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === %r).columns[1].publicType" % sheet) == 'PT',
+      evaluate("JSON.stringify(__palacedb.state.document.publicTypes)"))
+
+# One edit of the definition reaches both columns.
+evaluate("__palacedb.send('savePublicType', {name: 'PT', kind: 'enum', values: 'A,C', renameFrom: 'PT'})")
+time.sleep(1.5)
+check("editing a public type rewrites every column that uses it",
+      evaluate("(() => { const c = __palacedb.state.document.sheets.find(s => s.name === %r).columns;"
+               " return c[0].typeStr + '|' + c[1].typeStr; })()" % sheet) == '5:A,C|5:A,C',
+      evaluate("(() => { const c = __palacedb.state.document.sheets.find(s => s.name === %r).columns;"
+               " return c[0].typeStr + '|' + c[1].typeStr; })()" % sheet))
+
+# --- auto-increment id: new and inserted rows take the next number
+evaluate("__palacedb.send('addColumn', {sheet: %r, index: 2, name: 'ptNum', type: '3',"
+         " autoIncrement: true})" % sheet)
+time.sleep(1.4)
+rows_before = evaluate("__palacedb.state.document.sheets.find(s => s.name === %r).rowCount" % sheet)
+evaluate("__palacedb.send('insertRow', {sheet: %r, row: 0})" % sheet)
+time.sleep(1.3)
+
+# --- guid: every row gets its own identifier, duplicates included
+evaluate("__palacedb.send('addColumn', {sheet: %r, index: 3, name: 'ptGuid', type: '20'})" % sheet)
+time.sleep(1.4)
+evaluate("__palacedb.send('duplicateRows', {sheet: %r, rows: [0]})" % sheet)
+time.sleep(1.4)
+evaluate("__palacedb.send('save')")
+time.sleep(1.8)
+# This window is editing the crash-recovery copy, not the working copy.
+with open(RECOVER, encoding="utf-8") as handle:
+    saved = json.load(handle)
+saved_sheet = next(s for s in saved["sheets"] if s["name"] == sheet)
+numbers = [row.get("ptNum") for row in saved_sheet["lines"]]
+check("an auto-increment column numbers the rows it arrives with",
+      sorted(numbers[2:]) == list(range(1, rows_before + 1)), numbers[:5])
+check("an inserted row gets one more than the highest number",
+      numbers[0] == rows_before + 1, numbers[:3])
+check("a duplicated row gets a number of its own",
+      numbers[1] == rows_before + 2, numbers[:3])
+
+guids = [row.get("ptGuid") for row in saved_sheet["lines"]]
+check("every row has its own guid",
+      len(guids) == len(set(guids)) and all(isinstance(g, str) and len(g) == 13 for g in guids),
+      guids[:4])
+
+# --- deleting a public type leaves its columns alone but unbinds them
+evaluate("__palacedb.send('deletePublicType', {name: 'PT'})")
+time.sleep(1.3)
+check("deleting a public type unbinds its columns",
+      evaluate("__palacedb.state.document.publicTypes.length") == 0 and
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === %r).columns[0].publicType" % sheet) is None,
+      evaluate("JSON.stringify(__palacedb.state.document.publicTypes)"))
+
+# --- an id column that was deleted can be added back
+# A table gets an id column when it is created, but the column can be deleted on purpose;
+# the type has to stay available in the dialog or the table is left without a key.
+evaluate("__palacedb.send('addSheet', {name: 'IdTest'})")
+time.sleep(1.2)
+check("a new table starts with an id column",
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === 'IdTest').columns[0].typeStr") == '0',
+      evaluate("JSON.stringify(__palacedb.state.document.sheets.find(s => s.name === 'IdTest').columns)"))
+
+# A table cannot lose its last column, so it gets one more before the id goes.
+evaluate("__palacedb.send('addColumn', {sheet: 'IdTest', index: 1, name: 'name', type: '1'})")
+time.sleep(1.0)
+evaluate("__palacedb.send('deleteColumn', {sheet: 'IdTest', column: 'id'})")
+time.sleep(1.2)
+check("an id column can be deleted",
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === 'IdTest').columns.length") == 1,
+      evaluate("JSON.stringify(__palacedb.state.document.sheets.find(s => s.name === 'IdTest').columns)"))
+
+evaluate("__palacedb.run('addColumn')")
+ok = wait_for("!document.getElementById('modal').hidden", 10)
+check("the add column dialog offers the id type", ok and
+      evaluate("Array.from(document.querySelectorAll('#modal select')[0].options).some(o => o.value === '0')") is True,
+      evaluate("Array.from(document.querySelectorAll('#modal select')[0].options).map(o => o.value).join('|')"))
+evaluate("""(() => {
+  const name = document.querySelectorAll('#modal .form-row input[type=text]')[0];
+  name.value = 'id';
+  name.dispatchEvent(new Event('input', {bubbles: true}));
+  const type = document.querySelectorAll('#modal select')[0];
+  type.value = '0';
+  type.dispatchEvent(new Event('change', {bubbles: true}));
+  return type.value;
+})()""")
+time.sleep(0.3)
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("__palacedb.state.document.sheets.find(s => s.name === 'IdTest')"
+              ".columns.some(c => c.typeStr === '0')", 12)
+check("the id column can be added back", ok,
+      evaluate("JSON.stringify(__palacedb.state.document.sheets.find(s => s.name === 'IdTest').columns)"))
+
+evaluate("__palacedb.send('addColumn', {sheet: 'IdTest', index: 1, name: 'id2', type: '0'})")
+time.sleep(1.0)
+check("a table keeps a single id column",
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === 'IdTest').columns.length") == 2,
+      evaluate("Array.from(document.querySelectorAll('#toasts .toast')).map(t => t.textContent).join('|')"))
+
+# Changing a column's type into id is the other way of making a second one.
+evaluate("__palacedb.send('editColumn', {sheet: 'IdTest', column: 'name', name: 'name', type: '0'})")
+time.sleep(1.0)
+check("a text column cannot be turned into a second id",
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === 'IdTest')"
+               ".columns.find(c => c.name === 'name').typeStr") == '1'
+      and 'already has an ID column' in (evaluate(
+          "Array.from(document.querySelectorAll('#toasts .toast')).map(t => t.textContent).join('|')") or ''),
+      evaluate("Array.from(document.querySelectorAll('#toasts .toast')).map(t => t.textContent).join('|')"))
 
 # --- starting without a file reopens the most recent database (F03)
 # The instance above has been opening files, so the recent list is populated. A launch

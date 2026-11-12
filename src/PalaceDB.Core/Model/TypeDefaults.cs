@@ -61,6 +61,35 @@ public static class TypeDefaults
 }
 
 /// <summary>
+/// Numbers the rows of an auto-increment column. The column itself is a plain
+/// <see cref="ColumnType.Int"/> in the .cdb — only the side-car knows it numbers itself —
+/// so the value is chosen here and written like any other integer.
+/// </summary>
+public static class AutoNumber
+{
+    /// <summary>The value a new row gets: one more than the highest number already there.</summary>
+    public static int Next(SheetData sheet, string columnName) => Highest(sheet, columnName) + 1;
+
+    /// <summary>Highest number stored in the column, or 0 when it holds none yet.</summary>
+    public static int Highest(SheetData sheet, string columnName)
+    {
+        var highest = 0;
+        foreach (var row in sheet.Lines)
+        {
+            var number = row.Get(columnName) switch
+            {
+                CdbValue.Number n => (long)Math.Round(n.Value),
+                CdbValue.Str s when long.TryParse(s.Value, out var parsed) => parsed,
+                _ => 0L,
+            };
+            if (number > highest)
+                highest = (int)Math.Min(number, int.MaxValue);
+        }
+        return highest;
+    }
+}
+
+/// <summary>
 /// Generates the 13 character identifiers used by <see cref="ColumnType.Guid"/> columns.
 /// The encoding matches <c>cdb.Types.Guid.ofInt</c> so that generated values stay
 /// compatible with the original runtime library.

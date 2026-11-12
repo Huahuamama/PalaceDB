@@ -48,6 +48,7 @@ public sealed class ColumnInsertCommand : IEditorCommand
     private readonly CdbObject _raw;
     private readonly bool _optional;
     private readonly bool _fillRows;
+    private readonly bool _autoIncrement;
     private readonly Column _probe;
     private readonly CdbObject? _subRaw;
     private readonly string? _subName;
@@ -63,13 +64,15 @@ public sealed class ColumnInsertCommand : IEditorCommand
         bool optional = false,
         ColumnOptions options = default,
         IReadOnlyList<SubColumnSpec>? subColumns = null,
-        bool fillExistingRows = true)
+        bool fillExistingRows = true,
+        bool autoIncrement = false)
     {
         _sheet = sheet;
         _database = database;
         _index = Math.Clamp(index, 0, sheet.Columns.Count);
         _optional = optional;
         _fillRows = fillExistingRows;
+        _autoIncrement = autoIncrement;
 
         _raw = new CdbObject();
         _raw.Set("name", new CdbValue.Str(name));
@@ -144,9 +147,27 @@ public sealed class ColumnInsertCommand : IEditorCommand
 
         // Resolved here rather than in the constructor so the sub-table is visible.
         var fallback = TypeDefaults.Create(_probe, _database, _sheet, ignoreOptional: true);
+        // A Guid identifies one row, so a column that arrives with rows already in the
+        // table must not hand them all the same generated value; an auto-increment column
+        // numbers them 1..N in table order.
+        var perRow = _probe.Type is ColumnType.Guid || _autoIncrement;
+        // An id is the author's to choose, and a table that gets one back after the old id
+        // column was deleted has no sensible value for its rows: writing an empty string
+        // into every row would only fill the file with keys nobody typed. Leave them out;
+        // the status bar already reports the rows that still need an identifier.
+        var skipRows = _optional || !_fillRows || _probe.Type is ColumnType.Id;
         _defaults = new List<CdbValue?>(_sheet.Lines.Count);
-        foreach (var _ in _sheet.Lines)
-            _defaults.Add(_optional || !_fillRows ? null : CdbValueCloner.CloneOrNull(fallback));
+        for (var i = 0; i < _sheet.Lines.Count; i++)
+        {
+            if (skipRows)
+                _defaults.Add(null);
+            else if (_autoIncrement)
+                _defaults.Add(new CdbValue.Number(i + 1, null));
+            else if (perRow)
+                _defaults.Add(new CdbValue.Str(GuidGenerator.New()));
+            else
+                _defaults.Add(CdbValueCloner.CloneOrNull(fallback));
+        }
 
         _sheet.InsertColumn(_index, _raw);
 

@@ -25,7 +25,7 @@ public sealed record OptionsColumnOp(string Column, ColumnSpec Spec) : ColumnOp(
 
 public sealed record DeleteColumnOp(string Column) : ColumnOp(Column);
 
-public sealed record InsertColumnOp(string Column, int Index, ColumnSpec Spec) : ColumnOp(Column);
+public sealed record InsertColumnOp(string Column, int Index, ColumnSpec Spec, bool AutoIncrement = false) : ColumnOp(Column);
 
 public sealed record MoveColumnOp(string Column, int ToIndex) : ColumnOp(Column);
 
@@ -96,6 +96,12 @@ public static class ColumnOps
 
         var type = op.Spec.Type;
         var index = sheet.Columns.IndexOf(column);
+
+        // A table keeps a single ID column, and a change of type is a way of creating one:
+        // turning a text column into an id while the table already has one would leave two.
+        if (type is ColumnType.Id && sheet.IdColumn is { } existingId && !ReferenceEquals(existingId, column))
+            return null;
+
         var subName = $"{sheet.Name}@{op.Column}";
         var existingSub = database.GetSheet(subName);
         var composite = new CompositeCommand($"Change '{op.Column}' to {type.TypeName}");
@@ -180,7 +186,8 @@ public static class ColumnOps
             op.Spec.Optional,
             options,
             ToSubColumns(op.Spec),
-            fillInsertedRows);
+            fillInsertedRows,
+            op.AutoIncrement);
     }
 
     private static IEditorCommand? BuildMove(SheetData sheet, MoveColumnOp op)

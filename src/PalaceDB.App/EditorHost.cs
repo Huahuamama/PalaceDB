@@ -413,6 +413,14 @@ public sealed partial class EditorHost
                 DeleteTemplate(payload);
                 break;
 
+            case "savePublicType":
+                SavePublicType(payload);
+                break;
+
+            case "deletePublicType":
+                DeletePublicType(payload);
+                break;
+
             case "undo":
                 UndoOrRedo(undo: true);
                 break;
@@ -618,6 +626,10 @@ public sealed partial class EditorHost
                 document = OpenWithMerge(path);
                 AdoptDocument(document);
             }
+
+            // A column edited outside the application can disagree with the public type it
+            // follows; the definition wins, and the fix is an ordinary undoable step.
+            RepairPublicTypes();
 
             RememberRecent(document.Path);
             SendDocument();
@@ -1891,6 +1903,11 @@ public sealed partial class EditorHost
             ? PasteService.BuildInsert(sheet, row, clipboard, _document.Database)
             : PasteService.BuildOverwrite(sheet, row, column, clipboard, out skipped);
 
+        // Rows that arrive by paste are new rows too, so they take the next numbers of an
+        // auto-increment column instead of the default the paste service left in place.
+        if (command is RowInsertCommand insertCommand)
+            AssignAutoNumbers(sheet, insertCommand.Rows);
+
         if (command is null)
         {
             if (skipped > 0)
@@ -1972,6 +1989,13 @@ public sealed partial class EditorHost
             StringComparer.Ordinal);
 
         var copies = new List<CdbObject>();
+        // A copy is a new record: a Guid identifies a row, and an auto-increment column
+        // numbers rows, so neither may simply be cloned along with the rest.
+        var nextAuto = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var column in sheet.Columns)
+            if (_document.Meta.Document.IsAutoIncrement(sheet.Name, column.Name))
+                nextAuto[column.Name] = AutoNumber.Next(sheet, column.Name);
+
         foreach (var index in rows.OrderBy(i => i))
         {
             if (index < 0 || index >= sheet.Lines.Count)
@@ -1984,6 +2008,18 @@ public sealed partial class EditorHost
                 copy.Set(idColumn.Name, new CdbValue.Str(
                     PasteService.MakeUnique(id.Length == 0 ? "copy" : id, existing)));
             }
+
+            foreach (var column in sheet.Columns)
+            {
+                if (column.Type is ColumnType.Guid)
+                    copy.Set(column.Name, new CdbValue.Str(GuidGenerator.New()));
+                else if (nextAuto.TryGetValue(column.Name, out var next))
+                {
+                    copy.Set(column.Name, new CdbValue.Number(next, null));
+                    nextAuto[column.Name] = next + 1;
+                }
+            }
+
             copies.Add(copy);
         }
 
@@ -2023,6 +2059,15 @@ public sealed partial class EditorHost
         {
             if (column.Type is ColumnType.Id)
                 continue;
+
+            // An auto-increment column numbers itself: one more than the highest number
+            // already in the table, wherever the row is inserted.
+            if (_document!.Meta.Document.IsAutoIncrement(sheet.Name, column.Name))
+            {
+                row.Set(column.Name, new CdbValue.Number(AutoNumber.Next(sheet, column.Name), null));
+                continue;
+            }
+
             var value = TypeDefaults.Create(column, _document!.Database, sheet);
             if (value is not null)
                 row.Set(column.Name, value);
@@ -2034,6 +2079,26 @@ public sealed partial class EditorHost
             row.Set(idColumn.Name, new CdbValue.Str(string.Empty));
 
         return row;
+    }
+
+    /// <summary>
+    /// Numbers freshly built rows that are about to be inserted: each auto-increment
+    /// column continues from the highest number already in the table.
+    /// </summary>
+    private void AssignAutoNumbers(SheetData sheet, IReadOnlyList<CdbObject> rows)
+    {
+        if (_document is null || rows.Count == 0)
+            return;
+
+        foreach (var column in sheet.Columns)
+        {
+            if (!_document.Meta.Document.IsAutoIncrement(sheet.Name, column.Name))
+                continue;
+
+            var next = AutoNumber.Next(sheet, column.Name);
+            foreach (var row in rows)
+                row.Set(column.Name, new CdbValue.Number(next++, null));
+        }
     }
 
     /// <summary>Refreshes the document description and the visible rows after a structural edit.</summary>
@@ -2193,6 +2258,20 @@ public sealed partial class EditorHost
         if (!TryDecodeType(GetString(payload, "type"), out var type))
             return;
 
+        // A column that follows a public type takes its values from the definition, so a
+        // payload that disagrees can never make one copy drift from the others.
+        var publicTypeName = GetString(payload, "publicType").Trim();
+        var publicType = _document.Meta.Document.GetPublicType(publicTypeName);
+        if (publicTypeName.Length > 0 && publicType is null)
+        {
+            SendError($"The public type '{publicTypeName}' no longer exists.");
+            return;
+        }
+        if (publicType is not null)
+            type = PublicTypeService.ToColumnType(publicType);
+
+        var autoIncrement = GetBool(payload, "autoIncrement") && type is ColumnType.Int;
+
         // Requirements C08 / C09: one ID column per table, and no clash with the
         // virtual index/group columns.
         if (type is ColumnType.Id && sheet.IdColumn is not null)
@@ -2218,11 +2297,15 @@ public sealed partial class EditorHost
 
         var spec = BuildSpec(name, type, optional, options, subColumns);
         var command = BuildColumnCommand(
-            sheet, new[] { (ColumnOp)new InsertColumnOp(name, index, spec) }, $"Add Column '{name}'", fillInsertedRows: true);
+            sheet,
+            new[] { (ColumnOp)new InsertColumnOp(name, index, spec, autoIncrement) },
+            $"Add Column '{name}'",
+            fillInsertedRows: true);
         if (command is null)
             return;
 
         _document.Commands.Execute(command);
+        RememberColumnMeta(sheet, name, publicTypeName, autoIncrement);
         CommitColumnEdit(sheet);
         RefreshAfterStructuralChange(sheet.Name, 0, index);
         SendToast(DescribeColumnEdit($"Added column '{name}'.", sheet, name), "info");
@@ -2265,6 +2348,27 @@ public sealed partial class EditorHost
         if (!TryDecodeType(GetString(payload, "type"), out var type))
             return;
 
+        // A column bound to a public type always takes the definition's values, so the
+        // dialog can only choose which type it follows, not a private copy of the list.
+        var publicTypeName = GetString(payload, "publicType").Trim();
+        var publicType = _document.Meta.Document.GetPublicType(publicTypeName);
+        if (publicTypeName.Length > 0 && publicType is null)
+        {
+            SendError($"The public type '{publicTypeName}' no longer exists.");
+            return;
+        }
+        if (publicType is not null)
+            type = PublicTypeService.ToColumnType(publicType);
+
+        // A table keeps a single ID column, and changing a type is a way of making one.
+        if (type is ColumnType.Id && sheet.IdColumn is { } existingId && !ReferenceEquals(existingId, column))
+        {
+            SendError($"The table already has an ID column ('{existingId.Name}').");
+            return;
+        }
+
+        var autoIncrement = GetBool(payload, "autoIncrement") && type is ColumnType.Int;
+
         var optional = GetBool(payload, "optional");
         if (!TryReadColumnOptions(payload, type, optional, out var options))
             return;
@@ -2291,9 +2395,15 @@ public sealed partial class EditorHost
 
         var command = BuildColumnCommand(sheet, ops, $"Edit Column '{column.Name}'");
         if (command is null)
+        {
+            // Nothing about the column itself changed. The side-car parts (public type,
+            // auto-increment) may still have, and they are not part of that command.
+            TryApplyColumnMetaOnly(sheet, name, publicTypeName, autoIncrement, index);
             return;
+        }
 
         _document.Commands.Execute(command);
+        RememberColumnMeta(sheet, name, publicTypeName, autoIncrement);
         CommitColumnEdit(sheet);
         RefreshAfterStructuralChange(sheet.Name, 0, index);
         SendToast(DescribeColumnEdit($"Updated column '{name}'.", sheet, name), "info");
@@ -2356,6 +2466,25 @@ public sealed partial class EditorHost
         if (!TryDecodeType(GetString(payload, "type"), out var type))
             return;
 
+        var publicTypeName = GetString(payload, "publicType").Trim();
+        var publicType = _document.Meta.Document.GetPublicType(publicTypeName);
+        if (publicTypeName.Length > 0 && publicType is null)
+        {
+            SendError($"The public type '{publicTypeName}' no longer exists.");
+            return;
+        }
+        if (publicType is not null)
+            type = PublicTypeService.ToColumnType(publicType);
+
+        // A table keeps a single ID column, and changing a type is a way of making one.
+        if (type is ColumnType.Id && sheet.IdColumn is { } existingId && !ReferenceEquals(existingId, column))
+        {
+            SendError($"The table already has an ID column ('{existingId.Name}').");
+            return;
+        }
+
+        var autoIncrement = GetBool(payload, "autoIncrement") && type is ColumnType.Int;
+
         var index = sheet.Columns.IndexOf(column);
 
         if (!TryReadSubColumns(payload, type, column.Name, out var subColumns))
@@ -2378,9 +2507,13 @@ public sealed partial class EditorHost
             new[] { new RetypeColumnOp(column.Name, spec) },
             $"Change '{column.Name}' to {type.TypeName}");
         if (command is null)
+        {
+            TryApplyColumnMetaOnly(sheet, column.Name, publicTypeName, autoIncrement, index);
             return;
+        }
 
         _document.Commands.Execute(command);
+        RememberColumnMeta(sheet, column.Name, publicTypeName, autoIncrement);
         CommitColumnEdit(sheet);
         RefreshAfterStructuralChange(sheet.Name, 0, index);
         SendToast(DescribeColumnEdit($"'{column.Name}' is now a {type.TypeName} column.", sheet, column.Name), "info");
@@ -3771,6 +3904,8 @@ public sealed partial class EditorHost
                     ["defaultValue"] = DefaultTextOf(column.DefaultValue),
                     ["width"] = _document.Meta.GetColumnWidth(sheet.Name, column.Name),
                     ["bg"] = _document.Meta.GetColumnBackground(sheet.Name, column.Name),
+                    ["publicType"] = _document.Meta.Document.GetColumnPublicType(sheet.Name, column.Name),
+                    ["autoIncrement"] = _document.Meta.Document.IsAutoIncrement(sheet.Name, column.Name),
                 };
 
                 switch (column.Type)
@@ -3864,6 +3999,25 @@ public sealed partial class EditorHost
             subSheets.Add(new JsonObject { ["name"] = hidden.Name, ["columns"] = fields });
         }
 
+        // The sidebar lists the public enum / flags types of this file, and the column
+        // dialog needs the value lists to offer them as a type choice.
+        var publicTypes = new JsonArray();
+        foreach (var (name, definition) in _document.Meta.Document.PublicTypes)
+        {
+            var users = new JsonArray();
+            foreach (var (table, column) in _document.Meta.Document.ColumnsBoundTo(name))
+                users.Add(new JsonObject { ["sheet"] = table, ["column"] = column });
+
+            publicTypes.Add(new JsonObject
+            {
+                ["name"] = name,
+                ["kind"] = definition.IsFlags ? "flags" : "enum",
+                ["values"] = new JsonArray(definition.Values
+                    .Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
+                ["columns"] = users,
+            });
+        }
+
         Send(new JsonObject
         {
             ["type"] = "document",
@@ -3883,6 +4037,7 @@ public sealed partial class EditorHost
                 ["sheets"] = sheets,
                 ["subSheets"] = subSheets,
                 ["templates"] = templates,
+                ["publicTypes"] = publicTypes,
             },
         });
 

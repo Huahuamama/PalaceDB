@@ -16,6 +16,8 @@ PalaceDB is a Windows desktop editor for CastleDB .cdb game data files. It provi
 - Nested tables with `List` and `Properties` columns.
 - Row separators and named groups.
 - Table templates for synchronizing column definitions.
+- Public enum / flags types shared by several columns, edited in one place.
+- Auto-increment integer ID columns and per-row unique `Guid` values.
 - Undo and redo.
 - Automatic backups and recovery.
 - Reopens the most recent database on start-up; recent files open in their own window.
@@ -51,7 +53,7 @@ PalaceDB uses two files:
 | File | Contents |
 | --- | --- |
 | `.cdb` | Table definitions, column definitions, row data, and separator metadata. |
-| `.cdb.meta.json` | Column widths, row background colors, table templates, window position, and theme. |
+| `.cdb.meta.json` | Column widths, row background colors, table templates, public type definitions, window position, and theme. |
 
 The `.cdb` format is compatible with CastleDB. Untouched file content is preserved when saving.
 
@@ -72,7 +74,7 @@ The `.cdb` format is compatible with CastleDB. Untouched file content is preserv
 | `Color` | Color stored in `#RRGGBB` format, with a color picker. |
 | `List` | List of nested records, displayed in an expandable subtable. |
 | `Properties` | Structured nested properties, displayed in an expandable subtable. |
-| `Guid` | 13-character identifier generated automatically for new rows. Compatible with CastleDB's `Guid.ofInt` encoding. |
+| `Guid` | 13-character identifier generated for every row, including duplicated and pasted rows. Compatible with CastleDB's `Guid.ofInt` encoding. |
 | `Formula` | Formula data preserved without a dedicated editor. |
 | `Dynamic` | Dynamic data preserved without a dedicated editor. |
 
@@ -114,6 +116,8 @@ PalaceDB 是一个 Windows 桌面端编辑器，用于编辑 [CastleDB](https://
 - 支持 `List` 和 `Properties` 嵌套表。
 - 支持行分隔线和命名分组。
 - 支持表模板，可同步多个数据表的列结构。
+- 支持公共枚举 / 标志类型：一份定义被多列共用，改一处全部同步。
+- 支持自增整数 ID 列，以及每行唯一的 `Guid`。
 - 支持撤销和重做。
 - 自动备份与数据恢复。
 - 启动时自动打开最近编辑过的数据库；最近文件在新窗口中打开。
@@ -138,6 +142,7 @@ PalaceDB 是一个 Windows 桌面端编辑器，用于编辑 [CastleDB](https://
 - 使用工具栏添加行。
 - 右键行号可插入行或添加分隔线。
 - 右键列标题可插入、编辑、转换或删除列。
+- 侧栏 **Public Types** 面板管理公共枚举 / 标志类型。
 - 单击 `List` 或 `Properties` 单元格展开嵌套表。
 - 使用 `Ctrl+Z` 和 `Ctrl+Y` 撤销和重做。
 - 使用 `Ctrl+S` 保存。
@@ -149,7 +154,7 @@ PalaceDB 使用两个文件：
 | 文件 | 内容 |
 | --- | --- |
 | `.cdb` | 数据表定义、列定义、行数据及分隔线信息。 |
-| `.cdb.meta.json` | 列宽、行底色、表模板、窗口位置和配色。 |
+| `.cdb.meta.json` | 列宽、行底色、表模板、公共类型定义、窗口位置和配色。 |
 
 `.cdb` 与 CastleDB 格式兼容。保存时会保留未修改的文件内容。
 
@@ -170,7 +175,7 @@ PalaceDB 使用两个文件：
 | `Color` | 颜色列，以 `#RRGGBB` 格式存储，支持调色板选色。 |
 | `List` | 列表列，用于存储一组嵌套记录，可展开为二级表格编辑。 |
 | `Properties` | 属性列，用于存储结构化的嵌套属性，可展开为二级表格编辑。 |
-| `Guid` | 标识符列，自动生成 13 位标识符，编码方式兼容 CastleDB 的 `Guid.ofInt`。 |
+| `Guid` | 标识符列，每一行生成独立的 13 位标识符（复制行、插入行、粘贴行也会换新值），编码方式兼容 CastleDB 的 `Guid.ofInt`。 |
 | `Formula` | 公式列，保留原始数据，不提供专用编辑器。 |
 | `Dynamic` | 动态类型列，保留原始数据，不提供专用编辑器。 |
 
