@@ -18,6 +18,7 @@ PalaceDB is a Windows desktop editor for CastleDB .cdb game data files. It provi
 - Table templates for synchronizing column definitions.
 - Public enum / flags types shared by several columns, edited in one place.
 - Auto-increment integer ID columns and per-row unique `Guid` values.
+- Row groups that fold under their separator heading, and columns that can be hidden.
 - Undo and redo.
 - Automatic backups and recovery.
 - Reopens the most recent database on start-up; recent files open in their own window.
@@ -53,7 +54,7 @@ PalaceDB uses two files:
 | File | Contents |
 | --- | --- |
 | `.cdb` | Table definitions, column definitions, row data, and separator metadata. |
-| `.cdb.meta.json` | Column widths, row background colors, table templates, public type definitions, window position, and theme. |
+| `.cdb.meta.json` | Column widths, row background colors, table templates, public type definitions, hidden columns, folded row groups, window position, and theme. |
 
 The `.cdb` format is compatible with CastleDB. Untouched file content is preserved when saving.
 
@@ -118,6 +119,7 @@ PalaceDB 是一个 Windows 桌面端编辑器，用于编辑 [CastleDB](https://
 - 支持表模板，可同步多个数据表的列结构。
 - 支持公共枚举 / 标志类型：一份定义被多列共用，改一处全部同步。
 - 支持自增整数 ID 列，以及每行唯一的 `Guid`。
+- 支持按分隔线标题折叠整组行，以及隐藏 / 显示列（都不改动 `.cdb`）。
 - 支持撤销和重做。
 - 自动备份与数据恢复。
 - 启动时自动打开最近编辑过的数据库；最近文件在新窗口中打开。
@@ -137,12 +139,14 @@ PalaceDB 是一个 Windows 桌面端编辑器，用于编辑 [CastleDB](https://
 
 ## 基本操作
 
-- 在左侧侧栏选择数据表。
+- 左侧侧栏是三个标签页：**Tables**（表列表）、**Types**（公共枚举 / 标志类型）、**Columns**（当前表的列），
+  一次只展开一个，点标签切换。
 - 双击单元格或按 `F2` 编辑。
 - 使用工具栏添加行。
 - 右键行号可插入行或添加分隔线。
 - 右键列标题可插入、编辑、转换或删除列。
-- 侧栏 **Public Types** 面板管理公共枚举 / 标志类型。
+- **Types** 页管理公共枚举 / 标志类型，**Columns** 页切换列的显示 / 隐藏。
+- 点带标题的分隔线标题条即可折叠 / 展开它下面那一组行。
 - 单击 `List` 或 `Properties` 单元格展开嵌套表。
 - 使用 `Ctrl+Z` 和 `Ctrl+Y` 撤销和重做。
 - 使用 `Ctrl+S` 保存。
@@ -154,7 +158,7 @@ PalaceDB 使用两个文件：
 | 文件 | 内容 |
 | --- | --- |
 | `.cdb` | 数据表定义、列定义、行数据及分隔线信息。 |
-| `.cdb.meta.json` | 列宽、行底色、表模板、公共类型定义、窗口位置和配色。 |
+| `.cdb.meta.json` | 列宽、行底色、表模板、公共类型定义、隐藏列、折叠的行分组、窗口位置和配色。 |
 
 `.cdb` 与 CastleDB 格式兼容。保存时会保留未修改的文件内容。
 

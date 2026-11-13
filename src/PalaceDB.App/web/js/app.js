@@ -17,10 +17,11 @@ const elements = {
   sidebar: document.getElementById('sidebar'),
   sidebarRail: document.getElementById('sidebarRail'),
   sidebarExpand: document.getElementById('sidebarExpand'),
-  addTable: document.getElementById('addTable'),
+  sidebarTabs: document.getElementById('sidebarTabs'),
+  sidebarAdd: document.getElementById('sidebarAdd'),
   tableList: document.getElementById('tableList'),
-  addPublicType: document.getElementById('addPublicType'),
   publicList: document.getElementById('publicList'),
+  columnList: document.getElementById('columnList'),
   grid: document.getElementById('grid'),
   gridHeadScroll: document.getElementById('gridHeadScroll'),
   gridHead: document.getElementById('gridHead'),
@@ -61,6 +62,8 @@ const state = {
   currentSheet: null,
   appInfo: null,
   issue: null,
+  // Which sidebar section is open: 'tables', 'types' or 'columns'. Only one at a time.
+  sidebarTab: 'tables',
   // Interface text size, table text size and colour scheme (see settings.js).
   settings: normalize(DEFAULTS),
 };
@@ -119,6 +122,14 @@ grid.onClearRequest = () => {
 
 grid.onColumnResized = (sheet, column, width) => {
   send('setColumnWidth', { sheet, column, width });
+};
+
+// Clicking a group heading folds its rows away. The grid has already done it locally, so
+// the click feels immediate; the host writes the state to the side-car and re-sends the
+// document, which carries the same set back.
+grid.onGroupToggled = (title, collapsed) => {
+  if (!state.currentSheet) return;
+  send('setGroupCollapsed', { sheet: state.currentSheet, title, collapsed });
 };
 
 // ---------------------------------------------------------------- toolbar
@@ -269,6 +280,48 @@ function applySidebar(collapsed) {
 
 function toggleSidebar() {
   applySidebar(!elements.sidebar.classList.contains('collapsed'));
+}
+
+const SIDEBAR_TAB_KEY = 'palacedb.sidebar.tab';
+const SIDEBAR_TABS = ['tables', 'types', 'columns'];
+
+/**
+ * Opens one sidebar section and closes the others.
+ *
+ * Three lists stacked in a 232px column left every one of them too short to read, so they
+ * became tabs: whichever is open gets the whole height. The choice is remembered for the
+ * next session, like the collapsed state.
+ */
+function applySidebarTab(name, { persist = true } = {}) {
+  const tab = SIDEBAR_TABS.includes(name) ? name : 'tables';
+  state.sidebarTab = tab;
+
+  for (const button of elements.sidebarTabs.querySelectorAll('.sidebar-tab')) {
+    button.setAttribute('aria-selected', String(button.dataset.tab === tab));
+  }
+  for (const panel of elements.sidebar.querySelectorAll('.sidebar-panel')) {
+    panel.hidden = panel.dataset.panel !== tab;
+  }
+
+  // The + follows the tab: a table on one, a public type on the other. Columns are made
+  // from the grid's header menu, so there is nothing to add there.
+  const add = elements.sidebarAdd;
+  // Hidden but still in the layout: taking it out would let the three tabs grow and the
+  // whole strip would jump every time Columns is opened.
+  const canAdd = tab !== 'columns';
+  add.classList.toggle('off', !canAdd);
+  add.disabled = !canAdd;
+  if (canAdd) {
+    add.title = tab === 'types' ? 'Add a public enum or flags type' : 'Add a table';
+    add.setAttribute('aria-label', add.title);
+  }
+
+  if (persist) {
+    try { localStorage.setItem(SIDEBAR_TAB_KEY, tab); } catch { /* ignore */ }
+  }
+
+  // The lists are kept up to date while hidden, so switching is just a show.
+  renderTableList();
 }
 
 // ---------------------------------------------------------------- menus
@@ -781,6 +834,16 @@ function runAction(action, arg) {
     case 'deleteColumn':
       if (state.currentSheet) confirmDeleteColumn();
       break;
+    case 'hideColumn': {
+      if (!state.currentSheet) break;
+      const column = grid.columns[grid.cursor.col];
+      if (!column) break;
+      send('setColumnHidden', { sheet: state.currentSheet, column: column.name, hidden: true });
+      break;
+    }
+    case 'showAllColumns':
+      if (state.currentSheet) send('setColumnHidden', { sheet: state.currentSheet, all: true });
+      break;
     case 'convertColumn':
       if (arg) send('convertColumn', arg);
       break;
@@ -1108,6 +1171,18 @@ grid.onContextMenu = ({ header, x, y }) => {
     items.push('sep', { label: 'Delete Column', action: 'deleteColumn' }, 'sep',
       { label: 'Clear Column Colour', action: 'clearColumnFill' });
 
+    // Hiding a column is a view choice, not a schema change: the value stays in the file
+    // and the sidebar's Columns panel brings it back.
+    const sheetData = currentSheetData();
+    const hidden = sheetData ? sheetData.columns.filter((c) => c.hidden).length : 0;
+    items.push('sep',
+      { label: 'Hide Column', action: 'hideColumn', disabled: !column },
+      {
+        label: hidden > 0 ? `Show All Columns (${hidden} hidden)` : 'Show All Columns',
+        action: 'showAllColumns',
+        disabled: hidden === 0,
+      });
+
     showContextMenu(x, y, items);
     return;
   }
@@ -1310,6 +1385,21 @@ function subTypeString(field) {
   return parts.id;
 }
 
+/** The public type a field of a list follows, or null when it follows none. */
+function fieldPublicType(field) {
+  const name = field && field.publicType;
+  if (!name) return null;
+  return publicTypesOfDocument().find((type) => type.name === name) || null;
+}
+
+/**
+ * The type string a bound column or field carries in the .cdb: the definition's kind and
+ * values, spelled exactly like every other copy so the file stays a plain CastleDB file.
+ */
+function encodedPublicType(definition) {
+  return (definition.kind === 'flags' ? '10:' : '5:') + (definition.values || []).join(',');
+}
+
 /** Builds the small form used by "add column", "rename column" and "change type". */
 function buildColumnForm(initial, options = {}) {
   const showName = options.showName !== false;
@@ -1382,6 +1472,10 @@ function buildColumnForm(initial, options = {}) {
       id: field.id || field.name || '',
       name: field.name || '',
       type: typeStr,
+      // A field can follow a public enum / flags type, exactly like a column of a real
+      // table; the binding has to survive this dialog or editing any other field of the
+      // list would silently unbind it.
+      publicType: field.publicType || '',
     };
   });
 
@@ -1516,6 +1610,12 @@ function buildColumnForm(initial, options = {}) {
         // round trip of this dialog instead of being flattened to an empty enum.
         const parts = splitTypeStr(field.type);
 
+        // A bound field is a copy of its definition, so the definition decides both the
+        // kind and the values: the type picker and the value box are read-only while it
+        // follows one, and the stored string is kept equal to the shared one.
+        const definition = fieldPublicType(field);
+        if (definition) field.type = encodedPublicType(definition);
+
         const fieldType = document.createElement('select');
         fieldType.className = 'form-input';
         for (const type of SUB_TYPES) {
@@ -1525,6 +1625,10 @@ function buildColumnForm(initial, options = {}) {
           fieldType.appendChild(option);
         }
         fieldType.value = SUB_TYPES.some((type) => type.value === parts.id) ? parts.id : '1';
+        fieldType.disabled = Boolean(definition);
+        fieldType.title = definition
+          ? `The values come from the public type '${definition.name}'. Choose "— none —" to give this field its own list.`
+          : '';
         fieldType.addEventListener('change', () => {
           field.type = fieldType.value;
           renderSubRows();
@@ -1548,7 +1652,10 @@ function buildColumnForm(initial, options = {}) {
           values.className = 'form-input sub-values';
           values.placeholder = 'One, Two, Three';
           values.title = 'The values this field offers, separated by commas';
-          values.value = field.values === undefined ? parts.payload : field.values;
+          values.value = definition
+            ? (definition.values || []).join(',')
+            : (field.values === undefined ? parts.payload : field.values);
+          values.disabled = Boolean(definition);
           values.addEventListener('input', () => { field.values = values.value; });
           valuesLine.appendChild(values);
         }
@@ -1603,6 +1710,43 @@ function buildColumnForm(initial, options = {}) {
 
         subRowsBox.appendChild(line);
         if (valuesLine) subRowsBox.appendChild(valuesLine);
+
+        // A field of a list can follow a public type just like a column of a real table.
+        // The line is only there when the file has any definition to offer.
+        const types = publicTypesOfDocument();
+        if (types.length > 0) {
+          const publicLine = document.createElement('div');
+          publicLine.className = 'form-sub-public';
+
+          const publicCaption = document.createElement('span');
+          publicCaption.textContent = 'Public type';
+          publicLine.appendChild(publicCaption);
+
+          const publicChoice = document.createElement('select');
+          publicChoice.className = 'form-input';
+          publicChoice.title = 'Share one enum / flags definition with other fields and columns';
+          const noType = document.createElement('option');
+          noType.value = '';
+          noType.textContent = '\u2014 none \u2014';
+          publicChoice.appendChild(noType);
+          for (const type of types) {
+            const option = document.createElement('option');
+            option.value = type.name;
+            option.textContent = `${type.name} (${type.kind === 'flags' ? 'flags' : 'enum'})`;
+            publicChoice.appendChild(option);
+          }
+          publicChoice.value = definition ? definition.name : '';
+          publicChoice.addEventListener('change', () => {
+            field.publicType = publicChoice.value;
+            const chosen = types.find((type) => type.name === publicChoice.value);
+            // Detaching keeps the values the field already has; they become its own.
+            if (chosen) field.type = encodedPublicType(chosen);
+            renderSubRows();
+          });
+          publicLine.appendChild(publicChoice);
+
+          subRowsBox.appendChild(publicLine);
+        }
       });
     }
 
@@ -1772,6 +1916,7 @@ function buildColumnForm(initial, options = {}) {
         id: field.id || '',
         name: field.name.trim(),
         type: subTypeString(field),
+        publicType: field.publicType || '',
       }))
       .filter((field) => field.name.length > 0),
     localizable: () => (localizableInput ? localizableInput.checked : false),
@@ -1892,7 +2037,12 @@ function promptEditColumn(columnOverride, sheetOverride) {
   const subSheets = (state.document && state.document.subSheets) || [];
   const existing = subSheets.find((sheet) => sheet.name === subSheetName);
   const initialSub = existing
-    ? existing.columns.map((field) => ({ id: field.name, name: field.name, type: field.typeStr }))
+    ? existing.columns.map((field) => ({
+        id: field.name,
+        name: field.name,
+        type: field.typeStr,
+        publicType: field.publicType || '',
+      }))
     : [];
 
   let form = null;
@@ -1955,8 +2105,12 @@ function promptEditColumn(columnOverride, sheetOverride) {
  * only place a sub-field's enum or flag values can be given a list of their own.
  */
 function promptEditSubField({ sheet, row, column, fields, index, isNew }) {
-  const list = fields.map((field) => ({ name: field.name, type: field.type }));
-  const initial = isNew ? { name: '', type: '1' } : list[index];
+  const list = fields.map((field) => ({
+    name: field.name,
+    type: field.type,
+    publicType: field.publicType || '',
+  }));
+  const initial = isNew ? { name: '', type: '1', publicType: '' } : list[index];
   if (!initial) return;
 
   // Inserting keeps every field; editing replaces the one at `index`.
@@ -1968,6 +2122,8 @@ function promptEditSubField({ sheet, row, column, fields, index, isNew }) {
   let valuesRow = null;
   let tableSelect = null;
   let tableRow = null;
+  // Declared out here, not inside build(): onOk has to read the choice too.
+  let publicSelect = null;
 
   openModal({
     title: isNew ? `Insert a column in '${column}'` : `Edit column '${initial.name}'`,
@@ -2007,6 +2163,32 @@ function promptEditSubField({ sheet, row, column, fields, index, isNew }) {
       typeRow.appendChild(typeSelect);
       wrap.appendChild(typeRow);
 
+      // The public type this field follows, if any: the definition then owns the kind and
+      // the values, so the two rows below are read-only until it is detached.
+      const publicTypes = publicTypesOfDocument();
+      if (publicTypes.length > 0) {
+        const publicRow = document.createElement('label');
+        publicRow.className = 'form-row';
+        const publicCaption = document.createElement('span');
+        publicCaption.textContent = 'Public type';
+        publicRow.appendChild(publicCaption);
+        publicSelect = document.createElement('select');
+        publicSelect.className = 'form-input';
+        const noType = document.createElement('option');
+        noType.value = '';
+        noType.textContent = '\u2014 none \u2014';
+        publicSelect.appendChild(noType);
+        for (const type of publicTypes) {
+          const option = document.createElement('option');
+          option.value = type.name;
+          option.textContent = `${type.name} (${type.kind === 'flags' ? 'flags' : 'enum'})`;
+          publicSelect.appendChild(option);
+        }
+        publicSelect.value = fieldPublicType(initial) ? initial.publicType : '';
+        publicRow.appendChild(publicSelect);
+        wrap.appendChild(publicRow);
+      }
+
       valuesRow = document.createElement('label');
       valuesRow.className = 'form-row';
       const valuesCaption = document.createElement('span');
@@ -2045,6 +2227,14 @@ function promptEditSubField({ sheet, row, column, fields, index, isNew }) {
       wrap.appendChild(tableRow);
 
       const sync = () => {
+        const definition = publicSelect ? fieldPublicType({ publicType: publicSelect.value }) : null;
+        if (definition) {
+          typeSelect.value = definition.kind === 'flags' ? '10' : '5';
+          valuesInput.value = (definition.values || []).join(',');
+        }
+        typeSelect.disabled = Boolean(definition);
+        valuesInput.disabled = Boolean(definition);
+
         const id = typeSelect.value;
         const values = id === '5' || id === '10';
         valuesRow.hidden = !values;
@@ -2052,6 +2242,7 @@ function promptEditSubField({ sheet, row, column, fields, index, isNew }) {
         tableRow.hidden = id !== '6';
       };
       typeSelect.addEventListener('change', sync);
+      if (publicSelect) publicSelect.addEventListener('change', sync);
       sync();
 
       return wrap;
@@ -2067,13 +2258,16 @@ function promptEditSubField({ sheet, row, column, fields, index, isNew }) {
         return false;
       }
 
+      const publicType = publicSelect ? publicSelect.value : '';
+      const definition = fieldPublicType({ publicType });
       const id = typeSelect.value;
       let type = id;
-      if (id === '5' || id === '10') type = id + ':' + valuesInput.value;
+      if (definition) type = encodedPublicType(definition);
+      else if (id === '5' || id === '10') type = id + ':' + valuesInput.value;
       else if (id === '6') type = '6:' + (tableSelect.value || '');
 
       const next = others.slice();
-      next.splice(Math.max(0, Math.min(index, next.length)), 0, { name, type });
+      next.splice(Math.max(0, Math.min(index, next.length)), 0, { name, type, publicType });
       send('setSubFields', { sheet, row, column, fields: next });
       return true;
     },
@@ -3128,6 +3322,7 @@ document.addEventListener('keydown', (event) => {
 function renderTableList() {
   elements.tableList.innerHTML = '';
   renderPublicList();
+  renderColumnsList();
 
   if (!state.document) return;
 
@@ -3156,6 +3351,64 @@ function renderTableList() {
 
     item.addEventListener('click', () => selectSheet(sheet.name));
     elements.tableList.appendChild(item);
+  }
+}
+
+// ---------------------------------------------------------------- columns panel
+
+/**
+ * Lists the columns of the table on screen with a visibility switch.
+ *
+ * Hiding a column is a way of looking at a table, not an edit, so the click only writes
+ * the side-car; the document that comes back carries the new flag and the grid follows.
+ * The panel is also the only way back: the header a hidden column would be reached from
+ * is exactly the part that is gone.
+ */
+function renderColumnsList() {
+  elements.columnList.innerHTML = '';
+
+  const sheet = currentSheetData();
+  if (!sheet) {
+    const empty = document.createElement('div');
+    empty.className = 'column-empty';
+    empty.textContent = 'No table selected.';
+    elements.columnList.appendChild(empty);
+    return;
+  }
+
+  for (const column of sheet.columns) {
+    const item = document.createElement('div');
+    item.className = 'column-item' + (column.hidden ? ' hidden' : '');
+    item.dataset.column = column.name;
+    item.title = column.hidden
+      ? `${column.name} is hidden \u2014 click to show it`
+      : `${column.name} \u2014 click to hide it`;
+
+    const eye = document.createElement('span');
+    eye.className = 'column-eye';
+    eye.textContent = column.hidden ? '\u25CB' : '\u25C9';
+    item.appendChild(eye);
+
+    const name = document.createElement('span');
+    name.className = 'column-name';
+    name.textContent = column.name;
+    item.appendChild(name);
+
+    const type = document.createElement('span');
+    type.className = 'column-type';
+    type.textContent = column.type;
+    item.appendChild(type);
+
+    item.addEventListener('click', () => {
+      if (!state.currentSheet) return;
+      send('setColumnHidden', {
+        sheet: state.currentSheet,
+        column: column.name,
+        hidden: !column.hidden,
+      });
+    });
+
+    elements.columnList.appendChild(item);
   }
 }
 
@@ -3460,6 +3713,7 @@ function showWelcome() {
   toolbar.classList.remove('visible');
   document.body.classList.add('no-document');
   elements.tableList.innerHTML = '';
+  elements.columnList.innerHTML = '';
   elements.statusSheet.textContent = '-';
   elements.statusCursor.textContent = '-';
   elements.statusRows.textContent = '-';
@@ -3689,14 +3943,16 @@ onMessage((message) => {
 elements.welcomeOpen.addEventListener('click', () => send('openFile'));
 elements.gridAddTable.addEventListener('click', () => runAction('addTable'));
 
-elements.addTable.addEventListener('click', (event) => {
-  event.stopPropagation();
-  promptAddTable();
+elements.sidebarTabs.addEventListener('click', (event) => {
+  const tab = event.target.closest('.sidebar-tab');
+  if (!tab) return;
+  applySidebarTab(tab.dataset.tab);
 });
 
-elements.addPublicType.addEventListener('click', (event) => {
+elements.sidebarAdd.addEventListener('click', (event) => {
   event.stopPropagation();
-  promptPublicType(null);
+  if (state.sidebarTab === 'types') promptPublicType(null);
+  else if (state.sidebarTab === 'tables') promptAddTable();
 });
 
 // Right-clicking a table selects it and offers the table operations.
@@ -3739,6 +3995,7 @@ elements.sidebarExpand.addEventListener('click', toggleSidebar);
 try {
   applySettings(loadSettings(), { persist: false });
   applySidebar(localStorage.getItem(SIDEBAR_KEY) === '1');
+  applySidebarTab(localStorage.getItem(SIDEBAR_TAB_KEY) || 'tables', { persist: false });
 } catch {
   applySettings(DEFAULTS, { persist: false });
   applySidebar(false);

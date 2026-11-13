@@ -337,6 +337,51 @@ public sealed class MetaStore
         MarkDirty();
     }
 
+    // ---- hidden columns ------------------------------------------------
+
+    public bool IsColumnHidden(string sheetName, string columnName)
+    {
+        var id = Document.FindColumnId(sheetName, columnName);
+        return id is not null
+            && Document.Tables.TryGetValue(sheetName, out var table)
+            && table.Columns.TryGetValue(id, out var meta)
+            && meta.Hidden == true;
+    }
+
+    public void SetColumnHidden(string sheetName, string columnName, bool hidden)
+    {
+        var id = Document.FindColumnId(sheetName, columnName);
+        if (id is null || !Document.Tables.TryGetValue(sheetName, out var table))
+            return;
+        table.Columns[id].Hidden = hidden ? true : null;
+        MarkDirty();
+    }
+
+    // ---- collapsed row groups ------------------------------------------
+
+    /// <summary>Titles of the groups that are collapsed in one table.</summary>
+    public IReadOnlyList<string> GetCollapsedGroups(string sheetName) =>
+        Document.Tables.TryGetValue(sheetName, out var table)
+            ? table.CollapsedGroups
+            : Array.Empty<string>();
+
+    public void SetGroupCollapsed(string sheetName, string title, bool collapsed)
+    {
+        if (string.IsNullOrEmpty(title))
+            return;
+
+        var table = Document.GetOrCreateTable(sheetName);
+        var present = table.CollapsedGroups.Contains(title, StringComparer.Ordinal);
+        if (collapsed == present)
+            return;
+
+        if (collapsed)
+            table.CollapsedGroups.Add(title);
+        else
+            table.CollapsedGroups.RemoveAll(t => string.Equals(t, title, StringComparison.Ordinal));
+        MarkDirty();
+    }
+
     // ---- styles --------------------------------------------------------
 
     /// <summary>Table entry for a sheet, or null when the sheet is unknown.</summary>

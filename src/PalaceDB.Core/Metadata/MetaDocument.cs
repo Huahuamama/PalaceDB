@@ -37,6 +37,13 @@ public sealed class ColumnMeta
     /// </summary>
     [JsonPropertyName("autoIncrement")]
     public bool? AutoIncrement { get; set; }
+
+    /// <summary>
+    /// True when the column is hidden in the grid. Like the width it is a way of looking
+    /// at the table, not part of the data, so it lives in the side-car.
+    /// </summary>
+    [JsonPropertyName("hidden")]
+    public bool? Hidden { get; set; }
 }
 
 /// <summary>
@@ -79,6 +86,14 @@ public sealed class TableMeta
 
     [JsonPropertyName("cellStyles")]
     public Dictionary<string, Dictionary<string, StyleEntry>> CellStyles { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Titles of the row groups that are collapsed in the grid. A group is the run of rows
+    /// under one titled separator (the <c>group</c> field of the .cdb), so the title is the
+    /// only stable handle it has: row numbers move as soon as a row is inserted.
+    /// </summary>
+    [JsonPropertyName("collapsedGroups")]
+    public List<string> CollapsedGroups { get; set; } = new();
 }
 
 public sealed class WindowState
@@ -136,11 +151,11 @@ public sealed class AppearanceMeta
 public sealed class MetaDocument
 {
     /// <summary>
-    /// Bumped to 3 when public enum/flags types were added. A side-car of a newer version
-    /// is treated as read-only by an older build, which is what keeps it from silently
-    /// dropping the <c>publicTypes</c> block it does not understand.
+    /// Bumped to 4 when hidden columns and collapsed row groups were added. A side-car of
+    /// a newer version is treated as read-only by an older build, which is what keeps it
+    /// from silently dropping the blocks it does not understand.
     /// </summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     [JsonPropertyName("metaVersion")]
     public int MetaVersion { get; set; } = CurrentVersion;
@@ -279,6 +294,20 @@ public sealed class MetaDocument
             foreach (var column in table.Columns.Values)
                 if (column.PublicType is { } publicType && !PublicTypes.ContainsKey(publicType))
                     column.PublicType = null;
+
+        // A collapsed group is remembered by the title of its separator. Renaming or
+        // deleting that separator leaves an entry pointing at nothing, which would pile up
+        // in the side-car and collapse an unrelated group that later takes the same name.
+        foreach (var sheet in database.Sheets)
+        {
+            if (!Tables.TryGetValue(sheet.Name, out var table) || table.CollapsedGroups.Count == 0)
+                continue;
+
+            var titles = new HashSet<string>(
+                sheet.GetSeparators().Select(s => s.Title ?? string.Empty).Where(t => t.Length > 0),
+                StringComparer.Ordinal);
+            table.CollapsedGroups.RemoveAll(title => !titles.Contains(title));
+        }
     }
 
     /// <summary>Stable metadata id of a column, or null when unknown.</summary>

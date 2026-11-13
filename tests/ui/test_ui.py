@@ -945,7 +945,8 @@ evaluate("__palacedb.send('setSeparatorTitle', {sheet: __palacedb.state.currentS
 ok = wait_for("__palacedb.grid.separatorTitles.get(2) === 'Chapter'")
 check("separator title set", ok, evaluate("__palacedb.grid.separatorTitles.get(2)"))
 check("separator tooltip shows the title",
-      evaluate("document.querySelector('.sep-band[data-sep=\"2\"]').title") == "Separator: Chapter")
+      evaluate("document.querySelector('.sep-band[data-sep=\"2\"]').title").startswith("Separator: Chapter"),
+      evaluate("document.querySelector('.sep-band[data-sep=\"2\"]').title"))
 check("the title is written in the strip",
       evaluate("(document.querySelector('.sep-band[data-sep=\"2\"] .sep-label') || {}).textContent") == "Chapter")
 
@@ -1517,10 +1518,10 @@ toggle = evaluate("""(() => {
     const r = button.getBoundingClientRect();
     return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
   };
-  const label = document.querySelector('.sidebar-title');
+  const label = document.querySelector('.sidebar-tab[data-tab="tables"]');
   const before = box();
-  // The control sits to the left of the TABLES label, and belongs to neither the
-  // sidebar nor the toolbar: both of those change width when the list is hidden.
+  // The control sits to the left of the TABLES tab, and belongs to neither the sidebar
+  // nor the toolbar: both of those change width when the list is hidden.
   const leftOfTables = !!label && button.getBoundingClientRect().right
     <= label.getBoundingClientRect().left;
   const inToolbar = !!button.closest('.toolbar');
@@ -4157,8 +4158,10 @@ with open(PAL_META, encoding="utf-8") as handle:
     tpl_meta = json.load(handle)
 tpl_ids = list((tpl_meta.get("templates") or {}).keys())
 check("the template is stored in the side-car, not in the .cdb", len(tpl_ids) == 1, list(tpl_meta.keys()))
+# >= 3, not == 3: the side-car keeps gaining blocks (public types, hidden columns, folded
+# groups), and this check is about templates being understood at all.
 check("the side-car is written in the version that knows templates",
-      tpl_meta.get("metaVersion") == 3, tpl_meta.get("metaVersion"))
+      (tpl_meta.get("metaVersion") or 0) >= 3, tpl_meta.get("metaVersion"))
 check("the table records which template it follows",
       bool(tpl_ids) and (tpl_meta.get("tables") or {}).get(TPL_SHEET, {}).get("template") == tpl_ids[0],
       (tpl_meta.get("tables") or {}).get(TPL_SHEET, {}).get("template"))
@@ -4591,7 +4594,10 @@ time.sleep(1.2)
 evaluate("__palacedb.send('addColumn', {sheet: %r, index: 1, name: 'ptTwo', type: '5:A,B,C'})" % sheet)
 time.sleep(1.2)
 
-evaluate("document.getElementById('addPublicType').click()")
+# The public types live on their own tab now, and the + there adds one.
+evaluate("document.querySelector('.sidebar-tab[data-tab=\"types\"]').click()")
+time.sleep(0.4)
+evaluate("document.getElementById('sidebarAdd').click()")
 time.sleep(0.6)
 check("the sidebar opens a public type dialog",
       evaluate("document.getElementById('modalTitle').textContent") == "New public type",
@@ -4750,6 +4756,360 @@ check("a text column cannot be turned into a second id",
       and 'already has an ID column' in (evaluate(
           "Array.from(document.querySelectorAll('#toasts .toast')).map(t => t.textContent).join('|')") or ''),
       evaluate("Array.from(document.querySelectorAll('#toasts .toast')).map(t => t.textContent).join('|')"))
+
+# --- folding row groups, and hiding columns
+# A titled separator is the heading of a group: the rows under it are one unit that can be
+# folded away. Hiding a column is the other half of the same idea, and neither is an edit:
+# both are stored in the side-car and the file itself is left alone.
+evaluate("__palacedb.send('addSheet', {name: 'GroupTest'})")
+time.sleep(1.2)
+evaluate("__palacedb.send('addColumn', {sheet: 'GroupTest', index: 1, name: 'name', type: '1'})")
+time.sleep(1.0)
+# The row index is clamped by the host, so a large one always appends; six sends in a row
+# do not have to wait for the document to come back in between.
+for _ in range(6):
+    evaluate("__palacedb.send('insertRow', {sheet: 'GroupTest', row: 999})")
+time.sleep(1.8)
+check("the group table has its rows",
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === 'GroupTest').rowCount") == 6,
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === 'GroupTest').rowCount"))
+
+for row, title in ((0, 'Alpha'), (2, 'Beta'), (4, 'Gamma')):
+    evaluate("__palacedb.send('toggleSeparator', {sheet: 'GroupTest', row: %d})" % row)
+    time.sleep(0.5)
+    evaluate("__palacedb.send('setSeparatorTitle', {sheet: 'GroupTest', row: %d, title: %s})"
+             % (row, json.dumps(title)))
+    time.sleep(0.5)
+ok = wait_for("__palacedb.grid.separatorStrips.length === 3", 8)
+check("three group headings are drawn", ok,
+      evaluate("JSON.stringify(__palacedb.grid.separatorStrips)"))
+
+check("a heading shows a fold marker",
+      evaluate("document.querySelector('.sep-band[data-group=\"Alpha\"]').classList.contains('group-head')"),
+      evaluate("Array.from(document.querySelectorAll('.sep-band')).map(b => b.className).join('|')"))
+
+# Folding the first group takes its two rows out of the layout entirely.
+evaluate("document.querySelector('.sep-band[data-group=\"Alpha\"]').click()")
+ok = wait_for("__palacedb.grid.isHidden(0) && __palacedb.grid.isHidden(1)", 6)
+check("clicking a heading folds its rows", ok,
+      evaluate("[0,1,2].map(i => __palacedb.grid.isHidden(i)).join(',')"))
+check("the rows of a folded group are not drawn",
+      evaluate("!document.querySelector('.grid-row[data-row=\"0\"]')"
+               " && !document.querySelector('.grid-row[data-row=\"1\"]')"
+               " && !!document.querySelector('.grid-row[data-row=\"2\"]')"),
+      evaluate("Array.from(document.querySelectorAll('#gridRows .grid-row[data-row]')).map(r => r.dataset.row).join(',')"))
+check("a folded heading says how many rows it hides",
+      evaluate("(document.querySelector('.sep-band.folded .sep-count') || {}).textContent") == '2 rows',
+      evaluate("(document.querySelector('.sep-band.folded') || {}).textContent"))
+check("the rows below a folded group move up",
+      evaluate("Math.round(document.querySelector('.grid-row[data-row=\"2\"]').getBoundingClientRect().top"
+               " - document.querySelector('.sep-band[data-group=\"Alpha\"]').getBoundingClientRect().bottom)"
+               " === Math.round(document.querySelector('.sep-band[data-group=\"Beta\"]').getBoundingClientRect().height)"),
+      evaluate("Math.round(document.querySelector('.grid-row[data-row=\"2\"]').getBoundingClientRect().top)"))
+# Six rows and three strips are nine slots; folding two rows leaves seven.
+check("folding a group shrinks the scrollable height",
+      evaluate("__palacedb.grid.contentHeight()") == 7 * 38, evaluate("__palacedb.grid.contentHeight()"))
+
+evaluate("document.querySelector('.sep-band.folded').click()")
+ok = wait_for("!__palacedb.grid.isHidden(0) && !__palacedb.grid.isHidden(1)", 6)
+check("clicking a folded heading unfolds it", ok,
+      evaluate("[0,1].map(i => __palacedb.grid.isHidden(i)).join(',')"))
+check("unfolding restores the scrollable height",
+      evaluate("__palacedb.grid.contentHeight()") == 9 * 38, evaluate("__palacedb.grid.contentHeight()"))
+
+# --- a folded heading is still drawn when the fold happens off screen
+# The heading of a group used to be picked by its row index. Folding a group whose heading
+# sat above the viewport pulled its strip down into view, but the index was still far above
+# the window, so the strip was skipped: the rows collapsed and the way back disappeared.
+evaluate("__palacedb.send('addSheet', {name: 'FoldScroll'})")
+time.sleep(1.2)
+evaluate("__palacedb.send('addColumn', {sheet: 'FoldScroll', index: 1, name: 'name', type: '1'})")
+time.sleep(1.0)
+# One paste is enough to grow the table: rows that arrive this way are new rows.
+set_clipboard("\n".join("row%02d" % i for i in range(30)))
+evaluate("__palacedb.send('pasteCells', {sheet: 'FoldScroll', row: 0, column: 0, mode: 'insert'})")
+ok = wait_for("__palacedb.state.document.sheets.find(s => s.name === 'FoldScroll').rowCount >= 30", 20)
+check("a table tall enough to scroll has its rows", ok,
+      evaluate("__palacedb.state.document.sheets.find(s => s.name === 'FoldScroll').rowCount"))
+
+# A separator is a line of its own, so the lower one goes in first and the row numbers
+# above it do not move.
+evaluate("__palacedb.send('toggleSeparator', {sheet: 'FoldScroll', row: 10})")
+time.sleep(0.6)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: 'FoldScroll', row: 10, title: 'Beta'})")
+time.sleep(0.6)
+evaluate("__palacedb.send('toggleSeparator', {sheet: 'FoldScroll', row: 0})")
+time.sleep(0.6)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: 'FoldScroll', row: 0, title: 'Alpha'})")
+ok = wait_for("__palacedb.grid.separatorStrips.length === 2", 10)
+check("the tall table has two headings", ok,
+      evaluate("JSON.stringify(__palacedb.grid.separatorStrips)"))
+
+# Scroll to the bottom, so Alpha is far above the window when it folds.
+evaluate("__palacedb.grid.body.scrollTop = __palacedb.grid.body.scrollHeight")
+time.sleep(0.6)
+first_before = evaluate("__palacedb.grid.rowIndexAt(__palacedb.grid.body.scrollTop)")
+check("the grid is scrolled away from the first group", first_before >= 5, first_before)
+HIDDEN_ROWS = ("(() => { let n = 0; const grid = __palacedb.grid;"
+               " for (let i = 0; i < grid.rowCount; i++) if (grid.isHidden(i)) n++;"
+               " return n; })()")
+evaluate("__palacedb.send('setGroupCollapsed', {sheet: 'FoldScroll', title: 'Alpha', collapsed: true})")
+ok = wait_for("%s === 10" % HIDDEN_ROWS, 10)
+check("folding a group from off screen hides its rows", ok, evaluate(HIDDEN_ROWS))
+check("its heading is still drawn", evaluate("!!document.querySelector('.sep-band[data-group=\"Alpha\"]')"),
+      evaluate("Array.from(document.querySelectorAll('.sep-band')).map(b => b.dataset.group).join('|')"))
+check("the heading shows as folded",
+      evaluate("document.querySelector('.sep-band[data-group=\"Alpha\"]').classList.contains('folded')"),
+      evaluate("document.querySelector('.sep-band[data-group=\"Alpha\"]').className"))
+check("folding ten rows takes ten rows off the height",
+      evaluate("__palacedb.grid.contentHeight()")
+      == evaluate("__palacedb.grid.rowCount + 2") * 38 - 10 * 38,
+      evaluate("__palacedb.grid.contentHeight()"))
+# And the heading that is now on screen is still the way back.
+evaluate("document.querySelector('.sep-band[data-group=\"Alpha\"]').click()")
+ok = wait_for("!__palacedb.grid.isHidden(1)", 10)
+check("the drawn heading still unfolds the group", ok, evaluate(HIDDEN_ROWS))
+
+# The blocks below work on GroupTest again.
+evaluate("__palacedb.send('selectSheet', {sheet: 'GroupTest'})")
+wait_for("__palacedb.state.currentSheet === 'GroupTest'", 8)
+
+# --- the sidebar shows one section at a time
+# Three lists stacked on top of each other left every one of them a few rows tall. They are
+# now tabs: one open, the other two closed, and the + belongs to whichever is open.
+check("the sidebar has three tabs",
+      evaluate("Array.from(document.querySelectorAll('.sidebar-tab')).map(t => t.dataset.tab).join(',')")
+      == 'tables,types,columns',
+      evaluate("Array.from(document.querySelectorAll('.sidebar-tab')).map(t => t.dataset.tab).join(',')"))
+evaluate("document.querySelector('.sidebar-tab[data-tab=\"tables\"]').click()")
+time.sleep(0.4)
+check("only the open section is on screen",
+      evaluate("Array.from(document.querySelectorAll('.sidebar-panel'))"
+               ".filter(p => !p.hidden).map(p => p.dataset.panel).join(',')") == 'tables',
+      evaluate("Array.from(document.querySelectorAll('.sidebar-panel'))"
+               ".filter(p => !p.hidden).map(p => p.dataset.panel).join(',')"))
+check("the open section fills the sidebar",
+      evaluate("(() => { const panel = document.querySelector('.sidebar-panel:not([hidden])');"
+               " const box = panel.getBoundingClientRect();"
+               " return box.height > document.getElementById('sidebar').getBoundingClientRect().height - 80; })()"),
+      evaluate("(() => { const panel = document.querySelector('.sidebar-panel:not([hidden])');"
+               " const box = panel.getBoundingClientRect();"
+               " return [Math.round(box.height), Math.round(document.getElementById('sidebar').getBoundingClientRect().height)]; })()"))
+
+evaluate("document.querySelector('.sidebar-tab[data-tab=\"types\"]').click()")
+ok = wait_for("!document.querySelector('.sidebar-panel[data-panel=\"types\"]').hidden", 6)
+check("clicking a tab opens its section", ok,
+      evaluate("Array.from(document.querySelectorAll('.sidebar-panel'))"
+               ".filter(p => !p.hidden).map(p => p.dataset.panel).join(',')"))
+check("and closes the one that was open",
+      evaluate("document.querySelector('.sidebar-panel[data-panel=\"tables\"]').hidden"))
+check("the open tab is marked for the screen reader",
+      evaluate("Array.from(document.querySelectorAll('.sidebar-tab'))"
+               ".filter(t => t.getAttribute('aria-selected') === 'true').map(t => t.dataset.tab).join(',')")
+      == 'types')
+check("the + now offers a public type",
+      evaluate("document.getElementById('sidebarAdd').title") == 'Add a public enum or flags type',
+      evaluate("document.getElementById('sidebarAdd').title"))
+check("the open tab is remembered",
+      evaluate("localStorage.getItem('palacedb.sidebar.tab')") == 'types',
+      evaluate("localStorage.getItem('palacedb.sidebar.tab')"))
+
+# The three tabs share the width equally; taking the + out of the layout would make them
+# grow, so the width is captured while it is still there.
+TAB_WIDTHS = evaluate("Array.from(document.querySelectorAll('.sidebar-tab'))"
+                      ".map(t => Math.round(t.getBoundingClientRect().width))")
+evaluate("document.querySelector('.sidebar-tab[data-tab=\"columns\"]').click()")
+ok = wait_for("!document.querySelector('.sidebar-panel[data-panel=\"columns\"]').hidden", 6)
+check("the columns section opens too", ok,
+      evaluate("Array.from(document.querySelectorAll('.sidebar-panel'))"
+               ".filter(p => !p.hidden).map(p => p.dataset.panel).join(',')"))
+check("the column list is filled while its tab is open",
+      evaluate("document.querySelectorAll('#columnList .column-item').length") > 0,
+      evaluate("document.querySelectorAll('#columnList .column-item').length"))
+check("the + steps aside where there is nothing to add",
+      evaluate("document.getElementById('sidebarAdd').disabled === true"
+               " && getComputedStyle(document.getElementById('sidebarAdd')).visibility === 'hidden'"),
+      evaluate("JSON.stringify([document.getElementById('sidebarAdd').disabled,"
+               " getComputedStyle(document.getElementById('sidebarAdd')).visibility])"))
+check("the tabs keep their width when the + goes",
+      evaluate("Array.from(document.querySelectorAll('.sidebar-tab'))"
+               ".map(t => Math.round(t.getBoundingClientRect().width)).join(',')")
+      == ",".join(str(w) for w in (TAB_WIDTHS or [])),
+      (evaluate("Array.from(document.querySelectorAll('.sidebar-tab'))"
+                ".map(t => Math.round(t.getBoundingClientRect().width)).join(',')"), TAB_WIDTHS))
+evaluate("document.getElementById('sidebarAdd').click()")
+time.sleep(0.4)
+check("the + does nothing on the columns tab",
+      evaluate("document.getElementById('modal').hidden"),
+      evaluate("document.getElementById('modal').hidden ? null : document.getElementById('modalTitle').textContent"))
+
+# --- hidden columns
+evaluate("document.querySelector('.sidebar-tab[data-tab=\"columns\"]').click()")
+time.sleep(0.4)
+evaluate("__palacedb.grid.moveCursor(0, 0)")
+evaluate("document.querySelector('#columnList .column-item[data-column=\"name\"]').click()")
+ok = wait_for("__palacedb.state.document.sheets.find(s => s.name === 'GroupTest')"
+              ".columns.find(c => c.name === 'name').hidden === true", 8)
+check("a column can be hidden from the sidebar", ok,
+      evaluate("JSON.stringify(__palacedb.state.document.sheets.find(s => s.name === 'GroupTest').columns.map(c => [c.name, c.hidden]))"))
+check("a hidden column takes no room",
+      evaluate("__palacedb.grid.columns.find(c => c.name === 'name').width") == 0,
+      evaluate("__palacedb.grid.columns.map(c => c.name + ':' + c.width).join(',')"))
+check("a hidden column paints no header and no cell",
+      evaluate("document.querySelectorAll('#gridHead .head-cell.hidden').length") == 1
+      and evaluate("document.querySelectorAll('#gridRows .cell.hidden').length") > 0,
+      evaluate("document.querySelectorAll('#gridRows .cell.hidden').length"))
+check("the sidebar still lists a hidden column",
+      evaluate("!!document.querySelector('#columnList .column-item[data-column=\"name\"]')")
+      and evaluate("document.querySelector('#columnList .column-item[data-column=\"name\"]').classList.contains('hidden')"))
+
+evaluate("document.querySelector('#columnList .column-item[data-column=\"name\"]').click()")
+ok = wait_for("__palacedb.state.document.sheets.find(s => s.name === 'GroupTest')"
+              ".columns.find(c => c.name === 'name').hidden === false", 8)
+check("clicking it again shows the column", ok,
+      evaluate("__palacedb.grid.columns.map(c => c.name + ':' + c.width).join(',')"))
+
+# The header menu offers the same, and a way back for every hidden column at once.
+evaluate("__palacedb.grid.moveCursor(0, 1)")
+evaluate("__palacedb.grid.onContextMenu({row: 0, column: 1, header: true, x: 180, y: 110})")
+time.sleep(0.4)
+picked = evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+    .find(b => b.textContent.indexOf('Hide Column') >= 0);
+  if (item) item.click();
+  return Boolean(item);
+})()""")
+check("the header menu can hide a column", picked is True)
+ok = wait_for("__palacedb.state.document.sheets.find(s => s.name === 'GroupTest')"
+              ".columns.find(c => c.name === 'name').hidden === true", 8)
+check("hiding from the header menu works", ok,
+      evaluate("JSON.stringify(__palacedb.state.document.sheets.find(s => s.name === 'GroupTest').columns.map(c => [c.name, c.hidden]))"))
+
+evaluate("__palacedb.grid.moveCursor(0, 0)")
+evaluate("__palacedb.grid.onContextMenu({row: 0, column: 0, header: true, x: 180, y: 110})")
+time.sleep(0.4)
+picked = evaluate("""(() => {
+  const item = Array.from(document.querySelectorAll('#contextMenu .context-item'))
+    .find(b => b.textContent.indexOf('Show All Columns') >= 0);
+  if (item) item.click();
+  return item ? item.textContent : null;
+})()""")
+check("the menu offers to show every hidden column", bool(picked) and '1 hidden' in picked, picked)
+ok = wait_for("__palacedb.state.document.sheets.find(s => s.name === 'GroupTest')"
+              ".columns.every(c => !c.hidden)", 8)
+check("show all columns brings them back", ok,
+      evaluate("JSON.stringify(__palacedb.state.document.sheets.find(s => s.name === 'GroupTest').columns.map(c => [c.name, c.hidden]))"))
+
+# --- a field of a list can follow a public type
+# A field is a column of the hidden sub-table, so it is bound the same way a column of a
+# real table is: the definition owns the values, the copy in the .cdb stays identical to
+# every other copy, and editing the definition reaches the records of the list.
+SUB = ("((__palacedb.state.document.subSheets || [])"
+       ".find(s => s.name === 'PubList@tags') || {}).columns || []")
+evaluate("__palacedb.send('addSheet', {name: 'PubList'})")
+time.sleep(1.2)
+evaluate("__palacedb.send('addColumn', {sheet: 'PubList', index: 1, name: 'tags', type: '8:tags',"
+         " sub: [{name: 'value', type: '5:A,B'}]})")
+ok = wait_for("(__palacedb.state.document.subSheets || []).some(s => s.name === 'PubList@tags')", 12)
+check("the list column brings its hidden sub-table", ok,
+      evaluate("JSON.stringify(__palacedb.state.document.subSheets)"))
+evaluate("__palacedb.send('insertRow', {sheet: 'PubList', row: 999})")
+time.sleep(1.0)
+evaluate("__palacedb.send('savePublicType', {name: 'Rank', kind: 'enum', values: 'Low,Mid,High'})")
+ok = wait_for("(__palacedb.state.document.publicTypes || []).some(t => t.name === 'Rank')", 12)
+check("there is a public type to follow", ok,
+      evaluate("JSON.stringify(__palacedb.state.document.publicTypes)"))
+
+evaluate("""(() => {
+  const cell = document.querySelector('#gridRows .cell[data-row="0"][data-col="1"]');
+  if (!cell) return false;
+  cell.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+  cell.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+  cell.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+  return true;
+})()""")
+ok = wait_for("document.querySelectorAll('.sub-expansion').length === 1", 10)
+check("the list panel opens", ok)
+
+OPEN_FIELDS = """(() => {
+  const button = Array.from(document.querySelectorAll('.sub-expansion .sub-tool'))
+    .find(b => b.textContent.indexOf('Fields') >= 0);
+  if (!button) return false;
+  button.click();
+  return true;
+})()"""
+PICK_PUBLIC = """(name) => {
+  const select = document.querySelector('#modal .form-sub-public select');
+  if (!select) return null;
+  select.value = name;
+  select.dispatchEvent(new Event('change', {bubbles: true}));
+  return select.value;
+}"""
+evaluate(OPEN_FIELDS)
+ok = wait_for("!document.getElementById('modal').hidden", 10)
+check("the field dialog has a public type row", ok and
+      evaluate("document.querySelectorAll('#modal .form-sub-public select').length") == 1,
+      evaluate("document.querySelectorAll('#modal .form-sub-public select').length"))
+check("it offers the types of the file",
+      "Rank" in (evaluate("Array.from(document.querySelectorAll('#modal .form-sub-public select option'))"
+                          ".map(o => o.value).join('|')") or ''),
+      evaluate("Array.from(document.querySelectorAll('#modal .form-sub-public select option'))"
+               ".map(o => o.value).join('|')"))
+evaluate("(%s)('Rank')" % PICK_PUBLIC)
+time.sleep(0.5)
+check("a bound field cannot be given its own type",
+      evaluate("document.querySelector('#modal .form-sub-row select').disabled") is True)
+check("nor its own values",
+      evaluate("(document.querySelector('#modal .form-sub-values input') || {}).disabled") is True,
+      evaluate("(document.querySelector('#modal .form-sub-values input') || {}).value"))
+check("the values shown are the definition's",
+      evaluate("(document.querySelector('#modal .form-sub-values input') || {}).value") == 'Low,Mid,High',
+      evaluate("(document.querySelector('#modal .form-sub-values input') || {}).value"))
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("JSON.stringify(%s).indexOf('Rank') >= 0" % SUB, 12)
+check("applying binds the field", ok, evaluate("JSON.stringify(%s)" % SUB))
+check("the field carries the definition's values in its type string",
+      evaluate("(%s)[0] && (%s)[0].typeStr" % (SUB, SUB)) == '5:Low,Mid,High',
+      evaluate("(%s)[0] && (%s)[0].typeStr" % (SUB, SUB)))
+
+side_car = evaluate("__palacedb.state.document.path") + ".meta.json"
+bound = {}
+try:
+    bound = (json.load(open(side_car, encoding="utf-8")).get("tables") or {}).get("PubList@tags") or {}
+except Exception:
+    pass
+check("the side-car remembers the binding under the sub-table",
+      any((column or {}).get("publicType") == "Rank" for column in (bound.get("columns") or {}).values()),
+      json.dumps(bound))
+
+# The panel shows the definition's labels, and an edit to the definition reaches the field.
+evaluate("""(() => {
+  const cell = document.querySelector('.sub-expansion .sub-body .cell[data-row="0"][data-col="0"]');
+  return cell ? cell.textContent : null;
+})()""")
+evaluate("__palacedb.send('savePublicType', {name: 'Rank', kind: 'enum',"
+         " values: 'Low,Mid,High,Legendary', renameFrom: 'Rank'})")
+ok = wait_for("JSON.stringify(%s).indexOf('Legendary') >= 0" % SUB, 12)
+check("editing the definition reaches the field", ok, evaluate("(%s)[0] && (%s)[0].typeStr" % (SUB, SUB)))
+evaluate("__palacedb.send('undo')")
+ok = wait_for("JSON.stringify(%s).indexOf('Legendary') < 0" % SUB, 12)
+check("undo puts the shorter list back", ok, evaluate("(%s)[0] && (%s)[0].typeStr" % (SUB, SUB)))
+
+# Detaching keeps the values: they become the field's own list.
+evaluate(OPEN_FIELDS)
+wait_for("!document.getElementById('modal').hidden", 10)
+time.sleep(0.4)
+check("the dialog comes back with the binding selected",
+      evaluate("document.querySelector('#modal .form-sub-public select').value") == 'Rank',
+      evaluate("document.querySelector('#modal .form-sub-public select').value"))
+evaluate("(%s)('')" % PICK_PUBLIC)
+time.sleep(0.4)
+evaluate("document.getElementById('modalOk').click()")
+ok = wait_for("(%s)[0] && !(%s)[0].publicType" % (SUB, SUB), 12)
+check("detaching drops the binding", ok, evaluate("JSON.stringify(%s)" % SUB))
+check("and keeps the values it had",
+      evaluate("(%s)[0] && (%s)[0].typeStr" % (SUB, SUB)) == '5:Low,Mid,High',
+      evaluate("(%s)[0] && (%s)[0].typeStr" % (SUB, SUB)))
 
 # --- starting without a file reopens the most recent database (F03)
 # The instance above has been opening files, so the recent list is populated. A launch

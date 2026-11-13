@@ -203,9 +203,13 @@ export class SubPanel {
 
   // ------------------------------------------------------------- fields
 
-  /** The field list as the document stores it: a name and an encoded type each. */
+  /** The field list as the document stores it: a name, an encoded type and its binding. */
   fieldList() {
-    return this.fields.map((field) => ({ name: field.name, type: fieldTypeStr(field) }));
+    return this.fields.map((field) => ({
+      name: field.name,
+      type: fieldTypeStr(field),
+      publicType: field.publicType || '',
+    }));
   }
 
   /** Hands a new field list to the host, which rewrites the sub-table in one undo step. */
@@ -317,6 +321,9 @@ export class SubPanel {
       name: field.name,
       type: field.type,
       typeStr: field.typeStr || '',
+      // Set when the field follows a public enum / flags type; the panel only needs it so
+      // that a reorder or a delete writes the binding back unchanged.
+      publicType: field.publicType || '',
       optional: Boolean(field.optional),
       values: field.values || [],
       enumStr: Boolean(field.enumStr),
@@ -642,6 +649,10 @@ export class SubPanel {
  * An enum or a flag carries its values in that string, so they travel with the field.
  */
 function fieldTypeStr(field) {
+  // A bound field is a copy of its definition, so the string it carries in the .cdb is the
+  // one the definition wrote; re-encoding it from `values` would be a second source of
+  // truth for the same thing.
+  if (field.publicType) return field.typeStr || '';
   switch (field.type) {
     case 'Enum':
       return '5:' + (field.values || []).join(',');

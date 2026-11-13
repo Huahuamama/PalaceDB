@@ -208,4 +208,88 @@ public class PublicTypeTests
 
         Assert.Equal("Rarity", meta.GetColumnPublicType("Items", "quality"));
     }
+
+    // ---- fields of a list ------------------------------------------------
+    // A field of a List column is a column of the hidden sub-table, so it is bound the same
+    // way and has to follow the definition just like a column of a real table.
+
+    private const string ListJson = """
+{
+	"sheets": [
+		{
+			"name": "Items",
+			"columns": [
+				{ "typeStr": "0", "name": "id" },
+				{ "typeStr": "8:tags", "name": "tags" }
+			],
+			"lines": [ { "id": "sword", "tags": [ { "value": 2 } ] } ],
+			"props": {}
+		},
+		{
+			"name": "Items@tags",
+			"props": { "hide": true },
+			"columns": [ { "typeStr": "5:Common,Rare,Epic", "name": "value" } ],
+			"lines": []
+		}
+	],
+	"customTypes": [],
+	"compress": false
+}
+""";
+
+    private static (Database Db, MetaDocument Meta) BoundField()
+    {
+        var db = CdbReader.ParseDatabase(ListJson);
+        var meta = new MetaDocument();
+        meta.SyncWith(db);
+        meta.PublicTypes["Rarity"] = new PublicTypeMeta
+        {
+            Kind = "enum",
+            Values = new List<string> { "Common", "Rare", "Epic" },
+        };
+        meta.SetColumnPublicType("Items@tags", "value", "Rarity");
+        return (db, meta);
+    }
+
+    [Fact]
+    public void AFieldOfAListFollowsItsDefinition()
+    {
+        var (db, meta) = BoundField();
+
+        PublicTypeService.BuildUpdate(db, meta, "Rarity", "enum", new[] { "Common", "Epic" }).Execute();
+
+        var field = db.GetSheet("Items@tags")!.GetColumn("value")!;
+        Assert.Equal("5:Common,Epic", field.TypeStr);
+        // The record that pointed at Epic (index 2) now points at Epic's new index, 1.
+        var tag = (CdbValue.Obj)((CdbValue.Arr)db.GetSheet("Items")!.Lines[0].Get("tags")!).Items[0];
+        Assert.Equal(1, ((CdbValue.Number)tag.Value.Get("value")!).Value);
+    }
+
+    [Fact]
+    public void RepairBringsABoundFieldBackInLine()
+    {
+        var (db, meta) = BoundField();
+        var field = db.GetSheet("Items@tags")!.GetColumn("value")!;
+
+        field.Type = new ColumnType.Enum(new[] { "A", "B" });
+        field.FlushType();
+
+        var repaired = PublicTypeService.Repair(db, meta);
+
+        Assert.Equal(1, repaired);
+        Assert.Equal("5:Common,Rare,Epic", field.TypeStr);
+    }
+
+    [Fact]
+    public void DeletingADefinitionUnbindsTheFieldAndKeepsItsValues()
+    {
+        var (db, meta) = BoundField();
+
+        meta.DropPublicType("Rarity");
+        meta.SyncWith(db);
+
+        Assert.Null(meta.GetColumnPublicType("Items@tags", "value"));
+        Assert.Equal("5:Common,Rare,Epic", db.GetSheet("Items@tags")!.GetColumn("value")!.TypeStr);
+        Assert.Empty(PublicTypeService.BoundColumns(db, meta, "Rarity"));
+    }
 }

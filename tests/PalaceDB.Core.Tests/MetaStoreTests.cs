@@ -295,6 +295,142 @@ public class MetaStoreTests : IDisposable
         Assert.Equal(path + ".meta.json", MetaStore.PathFor(path));
     }
 
+    // ---- hidden columns (R16) ------------------------------------------
+
+    [Fact]
+    public void AColumnCanBeHiddenAndComesBackHidden()
+    {
+        var path = WriteDatabase();
+        var store = MetaStore.Load(path, Load(path));
+
+        Assert.False(store.IsColumnHidden("Items", "cost"));
+        store.SetColumnHidden("Items", "cost", true);
+        Assert.True(store.IsColumnHidden("Items", "cost"));
+        Assert.True(store.Save());
+
+        var reloaded = MetaStore.Load(path, Load(path));
+        Assert.True(reloaded.IsColumnHidden("Items", "cost"));
+        Assert.False(reloaded.IsColumnHidden("Items", "name"));
+    }
+
+    [Fact]
+    public void ShowingAColumnAgainDropsTheFlagFromTheFile()
+    {
+        var path = WriteDatabase();
+        var store = MetaStore.Load(path, Load(path));
+        store.SetColumnHidden("Items", "cost", true);
+        store.Save();
+
+        store.SetColumnHidden("Items", "cost", false);
+        store.Save();
+
+        Assert.DoesNotContain("\"hidden\"", File.ReadAllText(MetaStore.PathFor(path)));
+        Assert.False(MetaStore.Load(path, Load(path)).IsColumnHidden("Items", "cost"));
+    }
+
+    [Fact]
+    public void HidingAnUnknownColumnIsIgnored()
+    {
+        var path = WriteDatabase();
+        var store = MetaStore.Load(path, Load(path));
+        store.SetColumnHidden("Items", "doesNotExist", true);
+
+        Assert.False(store.IsColumnHidden("Items", "doesNotExist"));
+    }
+
+    // ---- collapsed row groups (R16) ------------------------------------
+
+    /// <summary>Three rows split by two titled separators, so there are two groups.</summary>
+    private const string GroupedJson = """
+{
+	"sheets": [
+		{
+			"name": "T",
+			"columns": [
+				{
+					"typeStr": "1",
+					"name": "label"
+				}
+			],
+			"lines": [
+				{
+					"label": "a"
+				},
+				{
+					"label": "b"
+				},
+				{
+					"label": "c"
+				}
+			],
+			"separators": [0, 2],
+			"props": {
+				"separatorTitles": ["First", "Second"]
+			}
+		}
+	],
+	"customTypes": []
+}
+""";
+
+    [Fact]
+    public void ACollapsedGroupComesBackCollapsed()
+    {
+        var path = _temp.WriteFile("Grouped.cdb", GroupedJson);
+        var store = MetaStore.Load(path, Load(path));
+
+        Assert.Empty(store.GetCollapsedGroups("T"));
+        store.SetGroupCollapsed("T", "First", true);
+        Assert.True(store.Save());
+
+        var reloaded = MetaStore.Load(path, Load(path));
+        Assert.Equal(new[] { "First" }, reloaded.GetCollapsedGroups("T"));
+    }
+
+    [Fact]
+    public void ExpandingAGroupRemovesItFromTheList()
+    {
+        var path = _temp.WriteFile("Grouped.cdb", GroupedJson);
+        var store = MetaStore.Load(path, Load(path));
+
+        store.SetGroupCollapsed("T", "First", true);
+        store.SetGroupCollapsed("T", "Second", true);
+        store.SetGroupCollapsed("T", "First", false);
+
+        Assert.Equal(new[] { "Second" }, store.GetCollapsedGroups("T"));
+    }
+
+    [Fact]
+    public void RepeatingACollapseDoesNotDirtyTheSideCar()
+    {
+        var path = _temp.WriteFile("Grouped.cdb", GroupedJson);
+        var store = MetaStore.Load(path, Load(path));
+        store.SetGroupCollapsed("T", "First", true);
+        Assert.True(store.Save());
+        Assert.False(store.IsDirty);
+
+        store.SetGroupCollapsed("T", "First", true);
+        Assert.False(store.IsDirty);
+    }
+
+    [Fact]
+    public void ACollapsedGroupWhoseSeparatorIsGoneIsForgotten()
+    {
+        var path = _temp.WriteFile("Grouped.cdb", GroupedJson);
+        var store = MetaStore.Load(path, Load(path));
+        store.SetGroupCollapsed("T", "First", true);
+        store.SetGroupCollapsed("T", "Second", true);
+        Assert.True(store.Save());
+
+        // The heading was renamed outside the application: its title no longer exists, so
+        // the entry would fold an unrelated group that later takes the same name.
+        var renamed = GroupedJson.Replace("\"First\"", "\"Renamed\"");
+        var renamedPath = _temp.WriteFile("Grouped.cdb", renamed);
+        var reloaded = MetaStore.Load(renamedPath, Load(renamedPath));
+
+        Assert.Equal(new[] { "Second" }, reloaded.GetCollapsedGroups("T"));
+    }
+
     [Fact]
     public void MetadataFileIsValidJsonWithAVersion()
     {

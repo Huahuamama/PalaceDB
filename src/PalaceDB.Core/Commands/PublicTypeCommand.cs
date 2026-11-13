@@ -31,7 +31,17 @@ public sealed class PublicTypeValuesCommand : IEditorCommand
         public required ColumnType BeforeType { get; init; }
         public required List<CdbValue?> Before { get; init; }
         public required List<CdbValue?> After { get; init; }
+
+        /// <summary>
+        /// The records a field of a list lives in, or null for a column of a real table.
+        /// A field is a column of the hidden sub-table, which has no rows of its own: its
+        /// values sit inside the records of the parent column.
+        /// </summary>
+        public List<RecordSlot>? Slots { get; init; }
     }
+
+    /// <summary>One value of a sub-table field: the record it is in and the name it has.</summary>
+    private sealed record RecordSlot(CdbObject Row, string Name);
 
     public PublicTypeValuesCommand(
         Database database,
@@ -64,9 +74,21 @@ public sealed class PublicTypeValuesCommand : IEditorCommand
 
         foreach (var (sheet, column) in bound)
         {
-            var before = new List<CdbValue?>(sheet.Lines.Count);
-            foreach (var row in sheet.Lines)
-                before.Add(row.Get(column.Name));
+            // A field of a List / Properties column has no rows of its own: its values are
+            // the matching key of every record of the column that owns the sub-table.
+            var slots = sheet.Props.Hide ? SlotsOf(database, sheet, column) : null;
+
+            var before = new List<CdbValue?>(slots?.Count ?? sheet.Lines.Count);
+            if (slots is null)
+            {
+                foreach (var row in sheet.Lines)
+                    before.Add(row.Get(column.Name));
+            }
+            else
+            {
+                foreach (var slot in slots)
+                    before.Add(slot.Row.Get(slot.Name));
+            }
 
             var after = new List<CdbValue?>(before.Count);
             foreach (var value in before)
@@ -80,6 +102,7 @@ public sealed class PublicTypeValuesCommand : IEditorCommand
                 BeforeType = column.Type,
                 Before = before,
                 After = after,
+                Slots = slots,
             });
         }
 
@@ -110,7 +133,7 @@ public sealed class PublicTypeValuesCommand : IEditorCommand
         {
             state.Column.Type = PublicTypeService.ToColumnType(_after);
             state.Column.FlushType();
-            Write(state.Column, state.After);
+            Write(state.Column, state.After, state.Slots);
         }
     }
 
@@ -123,7 +146,7 @@ public sealed class PublicTypeValuesCommand : IEditorCommand
             else
                 state.Column.Raw.Set("typeStr", new CdbValue.Str(state.BeforeTypeStr));
             state.Column.Type = state.BeforeType;
-            Write(state.Column, state.Before);
+            Write(state.Column, state.Before, state.Slots);
         }
 
         if (_before is null)
@@ -150,11 +173,61 @@ public sealed class PublicTypeValuesCommand : IEditorCommand
         };
     }
 
-    private static void Write(Column column, List<CdbValue?> values)
+    private static void Write(Column column, List<CdbValue?> values, List<RecordSlot>? slots)
     {
+        if (slots is not null)
+        {
+            for (var i = 0; i < slots.Count && i < values.Count; i++)
+                slots[i].Row.Set(slots[i].Name, CdbValueCloner.CloneOrNull(values[i]));
+            return;
+        }
+
         var sheet = column.Sheet;
         for (var i = 0; i < sheet.Lines.Count && i < values.Count; i++)
             sheet.Lines[i].Set(column.Name, CdbValueCloner.CloneOrNull(values[i]));
+    }
+
+    /// <summary>
+    /// Every record a sub-table field appears in, in document order: the parent column is
+    /// the List / Properties column whose hidden sub-table this is.
+    /// </summary>
+    private static List<RecordSlot> SlotsOf(Database database, SheetData sub, Column field)
+    {
+        var slots = new List<RecordSlot>();
+        foreach (var parent in database.Sheets)
+        {
+            if (parent.Props.Hide)
+                continue;
+
+            foreach (var column in parent.Columns)
+            {
+                if (column.Type is not (ColumnType.List or ColumnType.Properties))
+                    continue;
+
+                if (!ReferenceEquals(parent.GetSub(column), sub))
+                    continue;
+
+                foreach (var row in parent.Lines)
+                {
+                    switch (row.Get(column.Name))
+                    {
+                        case CdbValue.Arr list:
+                            foreach (var item in list.Items)
+                                if (item is CdbValue.Obj obj)
+                                    slots.Add(new RecordSlot(obj.Value, field.Name));
+                            break;
+
+                        case CdbValue.Obj props:
+                            slots.Add(new RecordSlot(props.Value, field.Name));
+                            break;
+                    }
+                }
+
+                return slots;
+            }
+        }
+
+        return slots;
     }
 
     private static bool SameValues(PublicTypeMeta a, PublicTypeMeta b)

@@ -99,6 +99,15 @@ export class Grid {
     // The same separators as a sorted list: a strip is one row tall, so everything below
     // it has to move down by one row per separator above it.
     this.separatorRows = [];
+    // Rows folded away under a collapsed group heading. `hiddenRows` is the per-row flag
+    // and `hiddenPrefix[i]` counts the hidden rows above row i, which is what turns "how
+    // far down is row N" back into an O(1) calculation (see topOf).
+    this.collapsedGroups = new Set();
+    this.hiddenRows = null;
+    this.hiddenPrefix = [0];
+    // Separators whose strip is drawn: the visible ones plus the headings of folded
+    // groups. A separator inside a folded group is folded with it.
+    this.separatorStrips = [];
     this.cursors = new Map();
     this.pendingStart = -1;
     this.pendingCount = 0;
@@ -243,7 +252,9 @@ export class Grid {
     this.sheet = sheet ? sheet.name : null;
     this.columns = (sheet ? sheet.columns : []).map((column) => ({
       ...column,
-      width: clampWidth(column.width),
+      // A hidden column keeps its index (the cells of a row are addressed by position) but
+      // takes no room: a zero width keeps every offset calculation working unchanged.
+      width: column.hidden ? 0 : clampWidth(column.width),
     }));
     this.rowCount = sheet ? sheet.rowCount : 0;
 
@@ -257,6 +268,14 @@ export class Grid {
       this.separatorTitles.set(index, titles[position] || '');
     });
     this.separatorRows = [...this.separatorTitles.keys()].sort((a, b) => a - b);
+
+    // Folded groups come from the side-car. A refresh usually brings the set the grid
+    // already has, and re-measuring then would throw away every row height for nothing.
+    const collapsed = sheet && Array.isArray(sheet.collapsedGroups) ? sheet.collapsedGroups : [];
+    const collapsedChanged = collapsed.length !== this.collapsedGroups.size
+      || collapsed.some((title) => !this.collapsedGroups.has(title));
+    this.collapsedGroups = new Set(collapsed);
+    this.rebuildVisibility({ remeasure: collapsedChanged });
 
     this.cache.clear();
     // A different table wraps differently: nothing measured for the old one applies.
@@ -273,8 +292,10 @@ export class Grid {
     const remembered = this.sheet ? this.cursors.get(this.sheet) : null;
     this.cursor = remembered
       ? {
-        row: clamp(remembered.row, 0, Math.max(0, this.rowCount - 1)),
-        col: clamp(remembered.col, 0, Math.max(0, this.columns.length - 1)),
+        // A collapsed group can swallow the row the cursor was left on, and a hidden
+        // column cannot hold it either: both are moved to the nearest one still shown.
+        row: this.snapRow(clamp(remembered.row, 0, Math.max(0, this.rowCount - 1))),
+        col: this.snapCol(clamp(remembered.col, 0, Math.max(0, this.columns.length - 1))),
       }
       : { row: 0, col: 0 };
     this.anchor = { ...this.cursor };
@@ -356,7 +377,12 @@ export class Grid {
     for (const row of payload.rows) this.cache.set(row.i, row);
     this.pendingStart = -1;
     this.pendingCount = 0;
-    this.rowCount = payload.total;
+    // A different total means rows were added or removed, so the fold map no longer
+    // covers the table and has to be rebuilt for the new size.
+    if (payload.total !== this.rowCount) {
+      this.rowCount = payload.total;
+      this.rebuildVisibility({ remeasure: true });
+    }
     this.render();
   }
 
@@ -377,6 +403,7 @@ export class Grid {
     this.columns.forEach((column, index) => {
       const cell = document.createElement('div');
       cell.className = 'head-cell' + (index === this.cursor.col ? ' cursor-col' : '');
+      if (column.hidden) cell.classList.add('hidden');
       cell.style.width = column.width + 'px';
       cell.dataset.col = String(index);
       if (column.bg) cell.style.backgroundColor = column.bg;
@@ -462,34 +489,163 @@ export class Grid {
     }
   }
 
+  // ------------------------------------------------------------- folded groups
+
+  /**
+   * Works out which rows a collapsed group hides.
+   *
+   * A group is the run of rows under one *titled* separator, which is exactly what the
+   * `group` field of the .cdb describes (see DerivedFields.ApplyGroup): an untitled
+   * separator is a divider inside the group, not the start of a new one. The rows above
+   * the first titled separator have no heading to click, so they are never folded.
+   */
+  rebuildVisibility({ remeasure = false } = {}) {
+    const count = this.rowCount;
+    const hidden = new Uint8Array(count);
+    const titled = this.separatorRows.filter((row) => (this.separatorTitles.get(row) || '').length > 0);
+    const foldedStarts = new Set();
+
+    for (let position = 0; position < titled.length; position += 1) {
+      const start = titled[position];
+      if (!this.collapsedGroups.has(this.separatorTitles.get(start))) continue;
+      foldedStarts.add(start);
+      const end = position + 1 < titled.length ? titled[position + 1] : count;
+      hidden.fill(1, start, Math.min(end, count));
+    }
+
+    const prefix = new Int32Array(count + 1);
+    for (let row = 0; row < count; row += 1) prefix[row + 1] = prefix[row] + hidden[row];
+
+    this.hiddenRows = hidden;
+    this.hiddenPrefix = prefix;
+    // A separator keeps its strip when its row is drawn, and also when it heads a folded
+    // group: the strip is the heading that folds and unfolds it. A separator *inside* a
+    // folded group is folded with it.
+    this.separatorStrips = this.separatorRows.filter((row) => !hidden[row] || foldedStarts.has(row));
+
+    if (remeasure) {
+      // A folded row must not leave its measured height behind: the heights above a row
+      // are what place it, and a row that is not drawn has no height at all.
+      this.rowHeights.clear();
+      this.heightIndexDirty = true;
+    }
+  }
+
+  isHidden(row) {
+    return Boolean(this.hiddenRows && this.hiddenRows[row]);
+  }
+
+  /** Rows folded away in total. */
+  hiddenRowCount() {
+    return this.hiddenPrefix[this.rowCount] || 0;
+  }
+
+  /** The nearest row at or after `row` that is still shown, or the nearest one before it. */
+  snapRow(row) {
+    if (this.rowCount === 0) return 0;
+    const start = clamp(row, 0, this.rowCount - 1);
+    for (let i = start; i < this.rowCount; i += 1) if (!this.isHidden(i)) return i;
+    for (let i = start; i >= 0; i -= 1) if (!this.isHidden(i)) return i;
+    return 0;
+  }
+
+  isColumnHidden(col) {
+    const column = this.columns[col];
+    return Boolean(column && column.hidden);
+  }
+
+  /** The nearest shown column at or after `col`, falling back to the last one before it. */
+  snapCol(col) {
+    if (this.columns.length === 0) return 0;
+    const start = clamp(col, 0, this.columns.length - 1);
+    for (let i = start; i < this.columns.length; i += 1) if (!this.isColumnHidden(i)) return i;
+    for (let i = start; i >= 0; i -= 1) if (!this.isColumnHidden(i)) return i;
+    return 0;
+  }
+
+  /** How many rows one group holds, the row of its heading included. */
+  groupSize(index) {
+    const titled = this.separatorRows.filter((row) => (this.separatorTitles.get(row) || '').length > 0);
+    const position = titled.indexOf(index);
+    if (position < 0) return 0;
+    const end = position + 1 < titled.length ? titled[position + 1] : this.rowCount;
+    return end - index;
+  }
+
+  /**
+   * Folds or unfolds the group that starts at `index`. The state changes here at once so
+   * the click has an immediate effect; the host writes it to the side-car and re-sends the
+   * document, which carries the same set back.
+   */
+  toggleGroup(index) {
+    const title = this.separatorTitles.get(index) || '';
+    if (!title) return;
+
+    const collapsed = !this.collapsedGroups.has(title);
+    if (collapsed) this.collapsedGroups.add(title);
+    else this.collapsedGroups.delete(title);
+
+    this.rebuildVisibility({ remeasure: true });
+
+    // A sub-table is anchored to a row number, so one that was folded away is closed
+    // rather than left hanging under whatever row now sits there.
+    for (const panel of [...this.panels.values()]) {
+      if (this.isHidden(panel.row)) this.removePanel(panel.id);
+    }
+
+    // The cursor cannot stay in a row that is no longer drawn: it leaves the group
+    // downwards, which is the row right after the heading.
+    if (this.isHidden(this.cursor.row)) {
+      this.cursor = { row: this.snapRow(index), col: this.cursor.col };
+      this.anchor = { ...this.cursor };
+    }
+
+    this.render();
+    this.emitCursor();
+    if (this.onGroupToggled) this.onGroupToggled(title, collapsed);
+  }
+
   /**
    * Y offset of a row inside the scrolling content. Rows below an open sub-table are
    * pushed down by its height, which is what makes the panel feel inserted in the table
    * rather than floating over it.
    */
   topOf(index) {
-    return index * ROW_HEIGHT + this.heightDeltaBefore(index) + this.separatorShift(index)
+    const folded = this.hiddenPrefix[index] || 0;
+    return (index - folded) * ROW_HEIGHT
+      + this.heightDeltaBefore(index) + this.separatorShift(index)
       + this.shiftBefore(index);
   }
 
   /**
    * Height taken by the separator strips above `index`, the strip of `index` itself
    * included: a separator at row N is drawn between row N-1 and row N, so row N and
-   * everything below it move down by one row.
+   * everything below it move down by one row. A strip that heads a folded group has no row
+   * to push down (its row is folded), so it only counts for the rows below it.
    */
   separatorShift(index) {
     let count = 0;
-    for (const separator of this.separatorRows) {
-      if (separator > index) break;
-      count += 1;
+    for (const separator of this.separatorStrips) {
+      if (separator < index) count += 1;
+      else if (separator === index && !this.isHidden(index)) count += 1;
+      else if (separator > index) break;
     }
     return count * ROW_HEIGHT;
+  }
+
+  /**
+   * Where a strip is drawn. A normal separator sits in the slot above its row; the strip
+   * of a folded group takes the place of the row it heads, which is folded away.
+   */
+  separatorTop(index) {
+    return this.topOf(index) - (this.isHidden(index) ? 0 : ROW_HEIGHT);
   }
 
   // ------------------------------------------------------------- row heights
 
   /** Height of one row: the base height unless its content needs more. */
   heightOf(index) {
+    if (this.isHidden(index)) return 0;
     const height = this.rowHeights.get(index);
     return height === undefined ? ROW_HEIGHT : height;
   }
@@ -543,7 +699,7 @@ export class Grid {
 
   /** Total height of the scrolling content, panels and separator strips included. */
   contentHeight() {
-    return this.rowCount * ROW_HEIGHT
+    return (this.rowCount - this.hiddenRowCount()) * ROW_HEIGHT
       + this.heightDeltaBefore(this.rowCount)
       + this.separatorShift(this.rowCount)
       + this.panelHeight();
@@ -582,11 +738,13 @@ export class Grid {
     // A separator strip sits above its row, so a click on it lands in the gap before that
     // row: it belongs to the row below it, which is the one the separator introduces.
     const next = best + 1;
-    if (next < this.rowCount && this.separatorTitles.has(next)
+    if (next < this.rowCount && this.separatorTitles.has(next) && !this.isHidden(next)
         && y >= this.topOf(next) - ROW_HEIGHT) {
-      return next;
+      return this.snapRow(next);
     }
-    return best;
+    // A folded row shares its offset with the next one drawn, so the search can land on
+    // one that is not on screen: the row under the pointer is the first one after it.
+    return this.snapRow(best);
   }
 
   /** Rows to draw for a scroll position: the visible ones plus a little overscan. */
@@ -663,7 +821,7 @@ export class Grid {
       }
       const separator = Number(row.dataset.sep);
       if (Number.isFinite(separator)) {
-        row.style.top = this.topOf(separator) - ROW_HEIGHT + 'px';
+        row.style.top = this.separatorTop(separator) + 'px';
       }
     }
     this.spacer.style.height = this.contentHeight() + 'px';
@@ -695,7 +853,7 @@ export class Grid {
   panelTop(panel) {
     // The strip of row+1 belongs below the panel, so it is not counted here: the panel is
     // anchored to the bottom of its own row.
-    let top = (panel.row + 1) * ROW_HEIGHT
+    let top = (panel.row + 1 - (this.hiddenPrefix[panel.row + 1] || 0)) * ROW_HEIGHT
       + this.heightDeltaBefore(panel.row + 1)
       + this.separatorShift(panel.row);
     for (const other of this.orderedPanels()) {
@@ -803,13 +961,22 @@ export class Grid {
     const selection = this.selectionBounds();
 
     for (let index = first; index < last; index += 1) {
+      // A folded row is not drawn at all: its group heading stands in its place.
+      if (this.isHidden(index)) continue;
       fragment.appendChild(this.buildRow(index, selection));
     }
 
-    // Separator strips belong to the same window of rows: one just above `first` can still
-    // be on screen, and one at `last` is only half a row below the fold.
-    for (const separator of this.separatorRows) {
-      if (separator < first - 1 || separator > last) continue;
+    // Separator strips are placed by their own offset, not by a row index. The strip of a
+    // folded group sits where its first hidden row would have been, which can be far below
+    // the separator's own index — filtering by index dropped the heading as soon as the
+    // view had scrolled past the start of the group, and it never came back.
+    const windowTop = this.topOf(first);
+    const windowBottom = this.topOf(Math.min(last, this.rowCount));
+    for (const separator of this.separatorStrips) {
+      const top = this.separatorTop(separator);
+      // `<` on the top edge: a strip that ends exactly where the window starts is the one
+      // drawn at the very top of the table, which is on screen when scrolled to 0.
+      if (top + ROW_HEIGHT < windowTop || top >= windowBottom) continue;
       fragment.appendChild(this.buildSeparator(separator));
     }
 
@@ -846,6 +1013,7 @@ export class Grid {
     const fragment = document.createDocumentFragment();
 
     for (let index = first; index < last; index += 1) {
+      if (this.isHidden(index)) continue;
       const cell = document.createElement('div');
       cell.className = 'gutter-cell';
       if (index % 2 === 1) cell.classList.add('alt');
@@ -859,12 +1027,14 @@ export class Grid {
     }
 
     // The strip the separator is drawn in also takes its row in the gutter, so the column
-    // of numbers stays continuous instead of showing a hole.
-    for (const separator of this.separatorRows) {
-      if (separator < first - 1 || separator > last) continue;
+    // of numbers stays continuous instead of showing a hole. Same y test as the strips
+    // themselves: a folded heading is not at its own row index (see render).
+    for (const separator of this.separatorStrips) {
+      const top = this.separatorTop(separator);
+      if (top + ROW_HEIGHT < this.topOf(first) || top >= this.topOf(Math.min(last, this.rowCount))) continue;
       const band = document.createElement('div');
       band.className = 'gutter-cell sep-band';
-      band.style.top = this.topOf(separator) - ROW_HEIGHT - scrollTop + 'px';
+      band.style.top = top - scrollTop + 'px';
       band.style.height = ROW_HEIGHT + 'px';
       fragment.appendChild(band);
     }
@@ -897,6 +1067,9 @@ export class Grid {
     this.columns.forEach((column, colIndex) => {
       const cell = document.createElement('div');
       cell.className = 'cell';
+      // A hidden column keeps its place in the row (the cells are addressed by index) but
+      // takes no room and is not painted.
+      if (column.hidden) cell.classList.add('hidden');
       if (NUMERIC_TYPES.has(column.type)) cell.classList.add('num');
       cell.style.width = column.width + 'px';
       cell.dataset.col = String(colIndex);
@@ -980,25 +1153,53 @@ export class Grid {
    * The strip a separator is drawn as. It is one row tall and sits right above the row it
    * belongs to, so that row (and everything below it) moves down instead of the divider
    * being painted over a data row.
+   *
+   * A titled strip is the heading of a group and folds it: the marker and the row count
+   * show the state, so a folded group still says how much is behind it.
    */
   buildSeparator(index) {
     const band = document.createElement('div');
-    band.className = 'grid-row sep-band';
-    band.style.top = this.topOf(index) - ROW_HEIGHT + 'px';
+    const title = this.separatorTitles.get(index) || '';
+    const folded = Boolean(title) && this.collapsedGroups.has(title);
+    const size = title ? this.groupSize(index) : 0;
+
+    band.className = 'grid-row sep-band' + (title ? ' group-head' : '') + (folded ? ' folded' : '');
+    band.style.top = this.separatorTop(index) + 'px';
     band.style.height = ROW_HEIGHT + 'px';
     band.style.width = this.totalWidth + 'px';
     band.dataset.sep = String(index);
 
-    const title = this.separatorTitles.get(index) || '';
-    band.title = title ? `Separator: ${title}` : 'Separator';
+    if (title) {
+      band.dataset.group = title;
+      const rows = `${size} row${size === 1 ? '' : 's'}`;
+      band.title = folded
+        ? `Separator: ${title} \u2014 ${rows} folded, click to expand`
+        : `Separator: ${title} \u2014 ${rows}, click to fold`;
+    } else {
+      band.title = 'Separator';
+    }
 
     // The name has to be visible, not only in the tooltip: a named separator is a heading
     // for the rows below it.
     if (title) {
+      const marker = document.createElement('span');
+      marker.className = 'sep-marker';
+      marker.textContent = folded ? '\u25B8' : '\u25BE';
+      band.appendChild(marker);
+
       const label = document.createElement('div');
       label.className = 'sep-label';
       label.textContent = title;
       band.appendChild(label);
+
+      if (folded) {
+        const count = document.createElement('span');
+        count.className = 'sep-count';
+        count.textContent = `${size} row${size === 1 ? '' : 's'}`;
+        band.appendChild(count);
+      }
+
+      band.addEventListener('click', () => this.toggleGroup(index));
     }
 
     return band;
@@ -1136,8 +1337,10 @@ export class Grid {
   moveCursor(row, col, extend = false, reveal = true, focus = true) {
     if (this.rowCount === 0 || this.columns.length === 0) return;
 
-    const nextRow = clamp(row, 0, this.rowCount - 1);
-    const nextCol = clamp(col, 0, this.columns.length - 1);
+    // Folded rows and hidden columns cannot hold the cursor: a step that lands on one
+    // continues in the same direction to the next one that is shown.
+    const nextRow = this.snapRow(clamp(row, 0, this.rowCount - 1));
+    const nextCol = this.snapCol(clamp(col, 0, this.columns.length - 1));
     if (nextRow === this.cursor.row && nextCol === this.cursor.col && !extend) return;
 
     if (!extend) this.anchor = { row: nextRow, col: nextCol };
@@ -1399,10 +1602,12 @@ export class Grid {
   selectRow(row, extend = false) {
     if (this.rowCount === 0 || this.columns.length === 0) return;
 
-    const target = clamp(row, 0, this.rowCount - 1);
+    const target = this.snapRow(clamp(row, 0, this.rowCount - 1));
+    // The block covers every column, including the hidden ones: hiding a column is a way
+    // of looking at the table, not a statement that its values are out of the selection.
     const lastCol = this.columns.length - 1;
     if (!extend) this.anchor = { row: target, col: lastCol };
-    this.cursor = { row: target, col: 0 };
+    this.cursor = { row: target, col: this.snapCol(0) };
 
     const scrollTop = this.body.scrollTop;
     const scrollLeft = this.body.scrollLeft;
@@ -1421,7 +1626,10 @@ export class Grid {
   selectAll() {
     if (this.rowCount === 0 || this.columns.length === 0) return;
     this.anchor = { row: 0, col: 0 };
-    this.cursor = { row: this.rowCount - 1, col: this.columns.length - 1 };
+    this.cursor = {
+      row: this.snapRow(this.rowCount - 1),
+      col: this.snapCol(this.columns.length - 1),
+    };
     this.scheduleRender();
     this.emitCursor();
   }

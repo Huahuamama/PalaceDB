@@ -138,6 +138,57 @@ public sealed partial class EditorHost
     }
 
     /// <summary>
+    /// Records the public type each field of a List / Properties column follows. The fields
+    /// are columns of a hidden sub-table, so they are bound exactly like a column of a real
+    /// table: the definition's values are copied into their <c>typeStr</c>, and the binding
+    /// lives in the side-car under the sub-table's name (<c>Items@tags</c>).
+    /// </summary>
+    private bool RememberSubFieldPublicTypes(
+        SheetData parent, string columnName, IReadOnlyList<(string Name, string? PublicType)> bindings)
+    {
+        if (_document is null || bindings.Count == 0)
+            return false;
+
+        var column = parent.GetColumn(columnName);
+        var sub = column is null ? null : parent.GetSub(column);
+        return sub is not null && RememberSubFieldPublicTypes(sub, bindings);
+    }
+
+    /// <summary>
+    /// The sub-table overload. Returns true when the side-car was written, so a caller that
+    /// changed nothing else can still save.
+    /// </summary>
+    private bool RememberSubFieldPublicTypes(
+        SheetData sub, IReadOnlyList<(string Name, string? PublicType)> bindings)
+    {
+        if (_document is null || bindings.Count == 0)
+            return false;
+
+        // Ids are handed out by Sync, so a field that just appeared has to be known before
+        // it can be bound. Only sync when one of them is genuinely unknown: the pass marks
+        // the side-car dirty, and a plain reorder must not rewrite the file.
+        var touched = false;
+        if (bindings.Any(binding => _document.Meta.Document.FindColumnId(sub.Name, binding.Name) is null))
+        {
+            _document.Meta.Sync(_document.Database);
+            touched = true;
+        }
+
+        foreach (var (name, publicType) in bindings)
+        {
+            var wanted = string.IsNullOrEmpty(publicType) ? null : publicType;
+            var current = _document.Meta.Document.GetColumnPublicType(sub.Name, name);
+            if (string.Equals(current ?? string.Empty, wanted ?? string.Empty, StringComparison.Ordinal))
+                continue;
+
+            _document.Meta.Document.SetColumnPublicType(sub.Name, name, wanted);
+            touched = true;
+        }
+
+        return touched;
+    }
+
+    /// <summary>
     /// Records a column edit that changes nothing about the column itself: choosing a
     /// public type with the values it already has, or ticking auto-increment on an Int
     /// column, produces no schema command, and would otherwise be silently dropped.

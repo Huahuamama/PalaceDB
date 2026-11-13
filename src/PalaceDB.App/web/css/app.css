@@ -465,13 +465,38 @@ html, body {
   padding-left: 2px;
 }
 
-.form-sub-values span {
-  flex: 0 0 52px;
+/* Both captions share one width so the values box and the public type list line up, and the
+   width has to fit the longer one ("Public type") on a single line. */
+.form-sub-values span,
+.form-sub-public span {
+  flex: 0 0 64px;
   color: var(--text-dim);
   font-size: var(--font-size-small);
+  white-space: nowrap;
 }
 
 .form-sub-values input { flex: 1 1 auto; }
+
+/* The public type a field of a list follows. Same shape as the values line above it, so a
+   field reads as one block: name, type, values, and where those values come from. */
+.form-sub-public {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 2px;
+}
+
+.form-sub-public select { flex: 1 1 auto; min-width: 0; }
+
+/* A field that follows a public type shows that type's values and keeps them read-only, so the
+   locked row has to look locked — otherwise it reads as an editable row that ignores typing. */
+.form-sub-row select:disabled,
+.form-sub-values input:disabled {
+  color: var(--text-faint);
+  background: var(--hover);
+  border-style: dashed;
+  cursor: default;
+}
 
 .form-sub-empty {
   margin: 0;
@@ -722,25 +747,65 @@ body.no-document .sidebar-collapse { display: none; }
 
 body.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
 
-.sidebar-header {
+/* Tabs instead of three stacked lists: the sidebar only has room for one of them at a
+   time, and the one on screen gets the whole height. */
+.sidebar-tabs {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  align-items: stretch;
+  gap: 2px;
   height: 44px;
   flex: 0 0 auto;
-  /* Room for the pinned toggle: "TABLES" starts to its right. */
-  padding: 0 8px 0 42px;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: calc(var(--font-size-small) - 1px);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.10em;
+  /* Room for the pinned toggle: the first tab starts to its right. */
+  padding: 0 6px 0 38px;
   border-bottom: 1px solid var(--border);
 }
 
-.sidebar-title { flex: 1 1 auto; }
+/* Three labels share ~130px of strip, so they are set in lower case without the wide
+   tracking the section headers used: uppercase "COLUMNS" does not fit and would be cut
+   off as "COLU...". */
+.sidebar-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 1px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: calc(var(--font-size-small) - 2px);
+  font-weight: 600;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.sidebar-tab:hover { color: var(--text); }
+
+.sidebar-tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* The section the tab stands for. Only one is ever on screen (see app.js). */
+.sidebar-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-panel[hidden] { display: none; }
+
+.sidebar-panel > .table-list,
+.sidebar-panel > .public-list,
+.sidebar-panel > .column-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
 
 .sidebar-toggle {
   flex: 0 0 auto;
@@ -760,8 +825,9 @@ body.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
 
 .sidebar-toggle:hover { background: var(--hover); color: var(--text); }
 
-.sidebar.collapsed .sidebar-header,
-.sidebar.collapsed .table-list { display: none; }
+/* Kept in the layout but out of the way: the tab strip must not reflow when a section
+   has nothing to add. */
+.sidebar-toggle.off { visibility: hidden; }
 
 /* Clickable strip shown in place of the tab list while collapsed. */
 .sidebar-rail {
@@ -779,8 +845,6 @@ body.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
 }
 
 .sidebar-rail:hover { background: var(--tab-active); color: var(--tab-active-text); }
-
-.sidebar.collapsed .sidebar-rail { display: none; }
 
 .table-list {
   overflow-y: auto;
@@ -851,15 +915,7 @@ body.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
 
 /* Public enum / flags types live under the table list. The header is shorter than the
    TABLES one because it does not have to make room for the pinned toggle. */
-.public-header {
-  height: 30px;
-  padding-left: 8px;
-  border-top: 1px solid var(--border);
-}
-
 .public-list {
-  flex: 0 1 auto;
-  max-height: 34%;
   overflow-y: auto;
   padding: 2px 8px 8px;
   display: flex;
@@ -913,8 +969,67 @@ body.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
   font-size: var(--font-size-small);
 }
 
-.sidebar.collapsed .public-header,
-.sidebar.collapsed .public-list { display: none; }
+/* Columns of the table on screen. It sits under the public types and scrolls on its own,
+   so a wide table does not push the table list out of the way. */
+.column-list {
+  overflow-y: auto;
+  padding: 2px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.column-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  color: var(--tab-text);
+  cursor: default;
+  font-size: var(--font-size-small);
+}
+
+.column-item:hover { background: var(--tab-hover); }
+
+/* A hidden column keeps its row in the list but reads as switched off, which is the only
+   way back: the header it would be reached from is the part that is hidden. */
+.column-item.hidden .column-name { color: var(--text-faint); text-decoration: line-through; }
+.column-item.hidden .column-eye { opacity: 0.45; }
+
+.column-item .column-eye {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.column-item .column-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.column-item .column-type {
+  flex: 0 0 auto;
+  font-size: calc(var(--font-size-small) - 2px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.column-empty {
+  padding: 2px 10px 4px;
+  color: var(--text-faint);
+  font-size: var(--font-size-small);
+}
 
 .content {
   flex: 1 1 auto;
@@ -1152,6 +1267,52 @@ body.sidebar-collapsed .sidebar-collapse svg { transform: scaleX(-1); }
   pointer-events: none;
   white-space: nowrap;
 }
+
+/* A titled separator is the heading of a row group and folds the rows under it, so that
+   strip takes the pointer (an unnamed one stays an inert divider). The marker says which
+   way the click will go, and a folded group still shows how many rows it hides. */
+.grid-row.sep-band.group-head {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.grid-row.sep-band.group-head:hover { background: var(--hover); }
+
+.grid-row.sep-band.group-head .sep-label { left: 26px; }
+
+/* A folded group is a closed lid: the strip keeps its rule above and gains one below, so
+   it reads as the whole group rather than as a heading with rows under it. */
+.grid-row.sep-band.folded {
+  box-shadow: inset 0 3px 0 var(--separator), inset 0 -1px 0 var(--separator);
+}
+
+.sep-marker {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 12px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
+  color: var(--separator);
+  pointer-events: none;
+}
+
+.sep-count {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--font-size-small);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+/* A hidden column keeps its slot in the row so the cells stay addressable by position,
+   but takes no room and paints nothing. */
+.cell.hidden,
+.head-cell.hidden { display: none; }
 
 .cell {
   display: flex;

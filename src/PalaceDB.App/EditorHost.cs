@@ -381,6 +381,14 @@ public sealed partial class EditorHost
                 SetColumnWidth(payload);
                 break;
 
+            case "setColumnHidden":
+                SetColumnHidden(payload);
+                break;
+
+            case "setGroupCollapsed":
+                SetGroupCollapsed(payload);
+                break;
+
             case "setStyle":
                 SetStyle(payload);
                 break;
@@ -2292,7 +2300,7 @@ public sealed partial class EditorHost
         if (!TryReadColumnOptions(payload, type, optional, out var options))
             return;
 
-        if (!TryReadSubColumns(payload, type, name, out var subColumns))
+        if (!TryReadSubColumns(payload, type, name, out var subColumns, out var subBindings))
             return;
 
         var spec = BuildSpec(name, type, optional, options, subColumns);
@@ -2306,6 +2314,7 @@ public sealed partial class EditorHost
 
         _document.Commands.Execute(command);
         RememberColumnMeta(sheet, name, publicTypeName, autoIncrement);
+        RememberSubFieldPublicTypes(sheet, name, subBindings);
         CommitColumnEdit(sheet);
         RefreshAfterStructuralChange(sheet.Name, 0, index);
         SendToast(DescribeColumnEdit($"Added column '{name}'.", sheet, name), "info");
@@ -2373,7 +2382,7 @@ public sealed partial class EditorHost
         if (!TryReadColumnOptions(payload, type, optional, out var options))
             return;
 
-        if (!TryReadSubColumns(payload, type, name, out var subColumns))
+        if (!TryReadSubColumns(payload, type, name, out var subColumns, out var subBindings))
             return;
 
         var index = sheet.Columns.IndexOf(column);
@@ -2398,12 +2407,20 @@ public sealed partial class EditorHost
         {
             // Nothing about the column itself changed. The side-car parts (public type,
             // auto-increment) may still have, and they are not part of that command.
-            TryApplyColumnMetaOnly(sheet, name, publicTypeName, autoIncrement, index);
+            // The fields of a list are in the same boat: binding one to a public type
+            // changes no schema, only the side-car.
+            var rebound = RememberSubFieldPublicTypes(sheet, name, subBindings);
+            if (!TryApplyColumnMetaOnly(sheet, name, publicTypeName, autoIncrement, index) && rebound)
+            {
+                CommitColumnEdit(sheet);
+                RefreshAfterStructuralChange(sheet.Name, 0, index);
+            }
             return;
         }
 
         _document.Commands.Execute(command);
         RememberColumnMeta(sheet, name, publicTypeName, autoIncrement);
+        RememberSubFieldPublicTypes(sheet, name, subBindings);
         CommitColumnEdit(sheet);
         RefreshAfterStructuralChange(sheet.Name, 0, index);
         SendToast(DescribeColumnEdit($"Updated column '{name}'.", sheet, name), "info");
@@ -2487,7 +2504,7 @@ public sealed partial class EditorHost
 
         var index = sheet.Columns.IndexOf(column);
 
-        if (!TryReadSubColumns(payload, type, column.Name, out var subColumns))
+        if (!TryReadSubColumns(payload, type, column.Name, out var subColumns, out var subBindings))
             return;
 
         var spec = BuildSpec(
@@ -2514,6 +2531,7 @@ public sealed partial class EditorHost
 
         _document.Commands.Execute(command);
         RememberColumnMeta(sheet, column.Name, publicTypeName, autoIncrement);
+        RememberSubFieldPublicTypes(sheet, column.Name, subBindings);
         CommitColumnEdit(sheet);
         RefreshAfterStructuralChange(sheet.Name, 0, index);
         SendToast(DescribeColumnEdit($"'{column.Name}' is now a {type.TypeName} column.", sheet, column.Name), "info");
@@ -2638,6 +2656,7 @@ public sealed partial class EditorHost
                 ["type"] = subColumn.Type.TypeName,
                 ["typeStr"] = subColumn.TypeStr ?? ColumnTypeCodec.Encode(subColumn.Type),
                 ["optional"] = subColumn.Optional,
+                ["publicType"] = _document.Meta.Document.GetColumnPublicType(sub.Name, subColumn.Name),
             };
 
             switch (subColumn.Type)
@@ -2799,6 +2818,7 @@ public sealed partial class EditorHost
             return;
 
         var specs = new List<SubColumnSpec>();
+        var bindings = new List<(string Name, string? PublicType)>();
         foreach (var item in fields.EnumerateArray())
         {
             var name = GetString(item, "name").Trim();
@@ -2814,7 +2834,27 @@ public sealed partial class EditorHost
             if (!TryDecodeType(GetString(item, "type"), out var type))
                 return;
 
+            // A field can follow a public enum / flags type, exactly like a column of a
+            // real table: the definition decides the values, so the field's own type string
+            // is overwritten with the shared one before the sub-table is rewritten.
+            var publicTypeName = GetString(item, "publicType").Trim();
+            if (publicTypeName.Length > 0)
+            {
+                var definition = _document.Meta.Document.GetPublicType(publicTypeName);
+                if (definition is null)
+                {
+                    SendError($"The public type '{publicTypeName}' no longer exists.");
+                    return;
+                }
+                type = PublicTypeService.ToColumnType(definition);
+            }
+
             specs.Add(new SubColumnSpec(name, type));
+
+            // Only a payload that says something about the binding may change it: a caller
+            // that does not know about public types (a reorder, a delete) leaves it alone.
+            if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("publicType", out _))
+                bindings.Add((name, publicTypeName.Length == 0 ? null : publicTypeName));
         }
 
         if (specs.Count == 0)
@@ -2825,9 +2865,16 @@ public sealed partial class EditorHost
 
         var command = new SubColumnsCommand(_document.Database, sub, sheet, column, specs);
         if (command.IsNoOp)
+        {
+            // The field list itself did not change, but the binding may have.
+            if (RememberSubFieldPublicTypes(sub, bindings))
+                CommitColumnEdit(sheet);
+            SendDocument();
             return;
+        }
 
         _document.Commands.Execute(command);
+        RememberSubFieldPublicTypes(sub, bindings);
         CommitColumnEdit(sheet);
 
         // The field list lives in the document: the column dialog reads the fields of a
@@ -3512,9 +3559,11 @@ public sealed partial class EditorHost
         JsonElement payload,
         ColumnType type,
         string columnName,
-        out IReadOnlyList<SubColumnSpec>? subColumns)
+        out IReadOnlyList<SubColumnSpec>? subColumns,
+        out List<(string Name, string? PublicType)> bindings)
     {
         subColumns = null;
+        bindings = new List<(string, string?)>();
 
         if (type is not (ColumnType.List or ColumnType.Properties or ColumnType.Polymorph))
             return true;
@@ -3539,11 +3588,27 @@ public sealed partial class EditorHost
                 if (!TryDecodeType(GetString(item, "type"), out var subType))
                     return false;
 
+                // A field can follow a public type just like a column of a real table. The
+                // definition wins over the type string the dialog sent, so the copy in the
+                // .cdb can never disagree with the others.
+                var publicTypeName = GetString(item, "publicType").Trim();
+                if (publicTypeName.Length > 0)
+                {
+                    var definition = _document!.Meta.Document.GetPublicType(publicTypeName);
+                    if (definition is null)
+                    {
+                        SendError($"The public type '{publicTypeName}' no longer exists.");
+                        return false;
+                    }
+                    subType = PublicTypeService.ToColumnType(definition);
+                }
+
                 // `id` is the name the field had when the dialog opened. It is what makes a
                 // rename keep the values already stored under the old name.
                 var original = GetString(item, "id").Trim();
                 specs.Add(new SubColumnSpec(
                     name, subType, original.Length == 0 ? null : original));
+                bindings.Add((name, publicTypeName.Length == 0 ? null : publicTypeName));
             }
         }
 
@@ -3634,6 +3699,66 @@ public sealed partial class EditorHost
                 ["width"] = Math.Round(width, 1),
             },
         });
+    }
+
+    /// <summary>
+    /// Shows or hides columns. Hiding one is a way of looking at the table, not an edit,
+    /// so it goes into the side-car and the document is re-sent with the new flag.
+    /// </summary>
+    private void SetColumnHidden(JsonElement payload)
+    {
+        // The state lives in the side-car, so a read-only document would take the change in
+        // memory and lose it on the next open: refuse instead of pretending.
+        if (_document is null || _document.IsReadOnly)
+            return;
+
+        var sheetName = GetString(payload, "sheet");
+        var sheet = _document.Database.GetSheet(sheetName);
+        if (sheet is null)
+            return;
+
+        var hidden = GetBool(payload, "hidden");
+
+        // "Show All Columns" hides nothing and shows everything: the flag is false and no
+        // column is named, which would otherwise read as "hide nothing in particular".
+        var all = GetBool(payload, "all");
+        if (all)
+        {
+            foreach (var column in sheet.Columns)
+                _document.Meta.SetColumnHidden(sheetName, column.Name, false);
+        }
+        else
+        {
+            var columnName = GetString(payload, "column");
+            if (sheet.GetColumn(columnName) is null)
+                return;
+
+            // The last visible column stays: an empty table is not a view anyone asked for
+            // and there would be no header left to bring the others back.
+            var visible = sheet.Columns.Count(c => !_document.Meta.IsColumnHidden(sheetName, c.Name));
+            if (hidden && visible <= 1 && !_document.Meta.IsColumnHidden(sheetName, columnName))
+                return;
+
+            _document.Meta.SetColumnHidden(sheetName, columnName, hidden);
+        }
+
+        _document.SaveMeta();
+        SendDocument();
+    }
+
+    /// <summary>Collapses or expands one titled row group. Stored per table in the side-car.</summary>
+    private void SetGroupCollapsed(JsonElement payload)
+    {
+        if (_document is null || _document.IsReadOnly)
+            return;
+
+        var sheetName = GetString(payload, "sheet");
+        if (_document.Database.GetSheet(sheetName) is null)
+            return;
+
+        _document.Meta.SetGroupCollapsed(sheetName, GetString(payload, "title"), GetBool(payload, "collapsed"));
+        _document.SaveMeta();
+        SendDocument();
     }
 
     /// <summary>
@@ -3906,6 +4031,7 @@ public sealed partial class EditorHost
                     ["bg"] = _document.Meta.GetColumnBackground(sheet.Name, column.Name),
                     ["publicType"] = _document.Meta.Document.GetColumnPublicType(sheet.Name, column.Name),
                     ["autoIncrement"] = _document.Meta.Document.IsAutoIncrement(sheet.Name, column.Name),
+                    ["hidden"] = _document.Meta.IsColumnHidden(sheet.Name, column.Name),
                 };
 
                 switch (column.Type)
@@ -3945,6 +4071,9 @@ public sealed partial class EditorHost
                 ["separatorTitles"] = new JsonArray(
                     sheet.GetSeparators().OrderBy(p => p.Index)
                         .Select(p => (JsonNode?)JsonValue.Create(p.Title ?? string.Empty)).ToArray()),
+                ["collapsedGroups"] = new JsonArray(
+                    _document.Meta.GetCollapsedGroups(sheet.Name)
+                        .Select(t => (JsonNode?)JsonValue.Create(t)).ToArray()),
                 ["columns"] = columns,
             };
 
@@ -3993,6 +4122,7 @@ public sealed partial class EditorHost
                     ["name"] = field.Name,
                     ["type"] = field.Type.TypeName,
                     ["typeStr"] = field.TypeStr ?? ColumnTypeCodec.Encode(field.Type),
+                    ["publicType"] = _document.Meta.Document.GetColumnPublicType(hidden.Name, field.Name),
                 });
             }
 
