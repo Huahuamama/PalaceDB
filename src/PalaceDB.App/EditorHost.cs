@@ -289,14 +289,6 @@ public sealed partial class EditorHost
                 EditColumn(payload);
                 break;
 
-            case "renameColumn":
-                RenameColumn(payload);
-                break;
-
-            case "changeColumnType":
-                ChangeColumnType(payload);
-                break;
-
             case "moveColumn":
                 MoveColumn(payload);
                 break;

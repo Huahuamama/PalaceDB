@@ -870,11 +870,11 @@ ok = wait_for("__palacedb.grid.columns.length === %d" % (columns_before + 1))
 check("column added", ok, evaluate("__palacedb.grid.columns.map(c=>c.name).join(',')"))
 check("new column is second", evaluate("__palacedb.grid.columns[1].name") == "Note")
 
-evaluate("__palacedb.send('renameColumn', {sheet: __palacedb.state.currentSheet, column: 'Note', name: 'Memo'})")
+evaluate("__palacedb.send('editColumn', {sheet: __palacedb.state.currentSheet, column: 'Note', name: 'Memo', type: '1'})")
 ok = wait_for("__palacedb.grid.columns.some(c => c.name === 'Memo')")
 check("column renamed", ok, evaluate("__palacedb.grid.columns.map(c=>c.name).join(',')"))
 
-evaluate("__palacedb.send('changeColumnType', {sheet: __palacedb.state.currentSheet, column: 'Memo', type: '3'})")
+evaluate("__palacedb.send('editColumn', {sheet: __palacedb.state.currentSheet, column: 'Memo', name: 'Memo', type: '3'})")
 ok = wait_for("__palacedb.grid.columns[1] && __palacedb.grid.columns[1].type === 'Int'")
 check("column type changed", ok, evaluate("__palacedb.grid.columns[1].typeStr"))
 
@@ -4193,8 +4193,11 @@ check("both tables are marked in the sidebar",
 
 # A rename reaches every table that follows the template, and the definition follows too.
 SECOND = TPL_COLUMNS[1]
-evaluate("__palacedb.send('renameColumn', {sheet: 'TplCopy', column: %s, name: 'tpl_renamed'})"
-         % json.dumps(SECOND))
+second_type = evaluate(
+    "(() => { const s = __palacedb.state.document.sheets.find(x => x.name === 'TplCopy');"
+    " const c = s && s.columns.find(x => x.name === %s); return c ? c.typeStr : ''; })()" % json.dumps(SECOND))
+evaluate("__palacedb.send('editColumn', {sheet: 'TplCopy', column: %s, name: 'tpl_renamed', type: %s})"
+         % (json.dumps(SECOND), json.dumps(second_type)))
 check("renaming a column in one table renames it in the others",
       wait_for("%s.indexOf('tpl_renamed') >= 0" % column_names_expr(TPL_SHEET), 15),
       column_names(TPL_SHEET))
