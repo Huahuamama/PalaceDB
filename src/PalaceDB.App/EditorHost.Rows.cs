@@ -35,9 +35,12 @@ public sealed partial class EditorHost
             return;
 
         var index = Math.Clamp(GetInt(payload, "row"), 0, sheet.Lines.Count);
+        // "Below" is not the same as "before the next row": at the end of a group those are
+        // different rows, and the new one has to stay in the group it was added to.
+        var after = GetBool(payload, "after");
         var row = CreateEmptyRow(sheet, index);
 
-        var command = new RowInsertCommand(sheet, index, new[] { row });
+        var command = new RowInsertCommand(sheet, index, new[] { row }, after: after);
         _document.Commands.Execute(command);
         RefreshAfterStructuralChange(sheet.Name, index);
     }
@@ -125,7 +128,9 @@ public sealed partial class EditorHost
             return;
 
         var insertAt = rows.Max() + 1;
-        _document.Commands.Execute(new RowInsertCommand(sheet, insertAt, copies));
+        // The copies sit right under the rows they came from, so they belong to the same
+        // group even when that row is the last one of it.
+        _document.Commands.Execute(new RowInsertCommand(sheet, insertAt, copies, after: true));
         RefreshAfterStructuralChange(sheet.Name, insertAt);
     }
 
@@ -140,10 +145,16 @@ public sealed partial class EditorHost
 
         var from = GetInt(payload, "from");
         var to = GetInt(payload, "to");
-        if (from < 0 || from >= sheet.Lines.Count || to < 0 || to >= sheet.Lines.Count || from == to)
+        if (from < 0 || from >= sheet.Lines.Count || to < 0 || to >= sheet.Lines.Count)
             return;
 
-        _document.Commands.Execute(new RowMoveCommand(sheet, from, to));
+        // A heading is drawn inside the gap in front of its first row, so that gap has two
+        // sides: dropping a row on the upper half keeps it with the rows above, dropping it
+        // on the lower half makes it the first row of the group. A caller that does not say
+        // (the Move Row Up / Down menu) means the lower half.
+        var below = GetBool(payload, "below", true);
+
+        _document.Commands.Execute(new RowMoveCommand(sheet, from, to, below));
         RefreshAfterStructuralChange(sheet.Name, to);
     }
 

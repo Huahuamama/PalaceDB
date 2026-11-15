@@ -560,9 +560,12 @@ public sealed partial class EditorHost
             ? value.GetInt32()
             : 0;
 
-    private static bool GetBool(JsonElement payload, string name) =>
+    private static bool GetBool(JsonElement payload, string name) => GetBool(payload, name, false);
+
+    private static bool GetBool(JsonElement payload, string name, bool fallback) =>
         payload.ValueKind == JsonValueKind.Object &&
         payload.TryGetProperty(name, out var value) &&
-        value.ValueKind is JsonValueKind.True or JsonValueKind.False &&
-        value.GetBoolean();
+        value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
+            : fallback;
 }

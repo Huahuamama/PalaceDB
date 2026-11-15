@@ -380,11 +380,11 @@ public class MetaStoreTests : IDisposable
         var store = MetaStore.Load(path, Load(path));
 
         Assert.Empty(store.GetCollapsedGroups("T"));
-        store.SetGroupCollapsed("T", "First", true);
+        store.SetGroupCollapsed("T", 0, true);
         Assert.True(store.Save());
 
         var reloaded = MetaStore.Load(path, Load(path));
-        Assert.Equal(new[] { "First" }, reloaded.GetCollapsedGroups("T"));
+        Assert.Equal(new[] { "0" }, reloaded.GetCollapsedGroups("T"));
     }
 
     [Fact]
@@ -393,11 +393,26 @@ public class MetaStoreTests : IDisposable
         var path = _temp.WriteFile("Grouped.cdb", GroupedJson);
         var store = MetaStore.Load(path, Load(path));
 
-        store.SetGroupCollapsed("T", "First", true);
-        store.SetGroupCollapsed("T", "Second", true);
-        store.SetGroupCollapsed("T", "First", false);
+        store.SetGroupCollapsed("T", 0, true);
+        store.SetGroupCollapsed("T", 1, true);
+        store.SetGroupCollapsed("T", 0, false);
 
-        Assert.Equal(new[] { "Second" }, store.GetCollapsedGroups("T"));
+        Assert.Equal(new[] { "1" }, store.GetCollapsedGroups("T"));
+    }
+
+    /// <summary>
+    /// Two groups may carry the same name - TestData1 has three called <c>MISC</c> - so the
+    /// fold state cannot be kept by title: folding one of them folded all of them.
+    /// </summary>
+    [Fact]
+    public void TwoGroupsWithTheSameNameFoldApart()
+    {
+        var path = _temp.WriteFile("Grouped.cdb", GroupedJson.Replace("\"Second\"", "\"First\""));
+        var store = MetaStore.Load(path, Load(path));
+
+        store.SetGroupCollapsed("T", 1, true);
+
+        Assert.Equal(new[] { "1" }, store.GetCollapsedGroups("T"));
     }
 
     [Fact]
@@ -405,30 +420,33 @@ public class MetaStoreTests : IDisposable
     {
         var path = _temp.WriteFile("Grouped.cdb", GroupedJson);
         var store = MetaStore.Load(path, Load(path));
-        store.SetGroupCollapsed("T", "First", true);
+        store.SetGroupCollapsed("T", 0, true);
         Assert.True(store.Save());
         Assert.False(store.IsDirty);
 
-        store.SetGroupCollapsed("T", "First", true);
+        store.SetGroupCollapsed("T", 0, true);
         Assert.False(store.IsDirty);
     }
 
     [Fact]
-    public void ACollapsedGroupWhoseSeparatorIsGoneIsForgotten()
+    public void ACollapsedGroupThatIsNoLongerThereIsForgotten()
     {
         var path = _temp.WriteFile("Grouped.cdb", GroupedJson);
         var store = MetaStore.Load(path, Load(path));
-        store.SetGroupCollapsed("T", "First", true);
-        store.SetGroupCollapsed("T", "Second", true);
+        store.SetGroupCollapsed("T", 0, true);
+        store.SetGroupCollapsed("T", 1, true);
         Assert.True(store.Save());
 
-        // The heading was renamed outside the application: its title no longer exists, so
-        // the entry would fold an unrelated group that later takes the same name.
-        var renamed = GroupedJson.Replace("\"First\"", "\"Renamed\"");
-        var renamedPath = _temp.WriteFile("Grouped.cdb", renamed);
-        var reloaded = MetaStore.Load(renamedPath, Load(renamedPath));
+        // The second heading was removed outside the application, which moves nothing but
+        // leaves the entry pointing past the last group: it would fold whatever group ends
+        // up in that position later.
+        var shorter = GroupedJson
+            .Replace("\"separators\": [0, 2]", "\"separators\": [0]")
+            .Replace("[\"First\", \"Second\"]", "[\"First\"]");
+        var shorterPath = _temp.WriteFile("Grouped.cdb", shorter);
+        var reloaded = MetaStore.Load(shorterPath, Load(shorterPath));
 
-        Assert.Equal(new[] { "Second" }, reloaded.GetCollapsedGroups("T"));
+        Assert.Equal(new[] { "0" }, reloaded.GetCollapsedGroups("T"));
     }
 
     [Fact]

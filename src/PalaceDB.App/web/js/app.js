@@ -59,10 +59,11 @@ grid.onColumnResized = (sheet, column, width) => {
 
 // Clicking a group heading folds its rows away. The grid has already done it locally, so
 // the click feels immediate; the host writes the state to the side-car and re-sends the
-// document, which carries the same set back.
-grid.onGroupToggled = (title, collapsed) => {
+// document, which carries the same state back. The group is named by its position among
+// the titled headings: a title is not unique, a row number moves with every insert.
+grid.onGroupToggled = (index, collapsed) => {
   if (!state.currentSheet) return;
-  send('setGroupCollapsed', { sheet: state.currentSheet, title, collapsed });
+  send('setGroupCollapsed', { sheet: state.currentSheet, index, collapsed });
 };
 
 

@@ -322,7 +322,10 @@ public sealed partial class EditorHost
         SendDocument();
     }
 
-    /// <summary>Collapses or expands one titled row group. Stored per table in the side-car.</summary>
+    /// <summary>
+    /// Collapses or expands one titled row group, named by its position among the titled
+    /// headings. Stored per table in the side-car.
+    /// </summary>
     private void SetGroupCollapsed(JsonElement payload)
     {
         if (_document is null || _document.IsReadOnly)
@@ -332,7 +335,7 @@ public sealed partial class EditorHost
         if (_document.Database.GetSheet(sheetName) is null)
             return;
 
-        _document.Meta.SetGroupCollapsed(sheetName, GetString(payload, "title"), GetBool(payload, "collapsed"));
+        _document.Meta.SetGroupCollapsed(sheetName, GetInt(payload, "index"), GetBool(payload, "collapsed"));
         _document.SaveMeta();
         SendDocument();
     }

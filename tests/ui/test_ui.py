@@ -254,6 +254,12 @@ def evaluate(expr, await_promise=False, sock=None):
                 raise RuntimeError(str(description) + " :: " + expr[:200])
             return res.get("result", {}).get("value")
 
+def mouse_event(x, y, kind, clicks=1):
+    """Sends one mouse event without waiting: the next evaluate() consumes the ack."""
+    counter[0] += 1
+    ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchMouseEvent",
+                        "params": {"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks}}))
+
 def wait_for_file(path, timeout=15, should_exist=True):
     end = time.time() + timeout
     while time.time() < end:
@@ -572,8 +578,9 @@ time.sleep(1.0)
 check("undo restores the separator indices", current_separators() == sep_indices,
       (sep_indices, current_separators()))
 
-# --- dragging a row drags the separator that heads it. The dividers are cleared first so
-# the check has one divider it owns; both commands are undone at the end.
+# --- a heading owns the rows under it, so dragging one of them out of the group leaves the
+# heading where it is. The dividers are cleared first so the check has one it owns; both
+# commands are undone at the end.
 for row in current_separators():
     evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: %d})" % row)
 wait_for("__palacedb.grid.separatorTitles.size === 0", 5)
@@ -583,13 +590,13 @@ check("a separator is prepared for the drag test",
       wait_for("__palacedb.grid.separatorTitles.has(3)"), current_separators())
 
 evaluate("__palacedb.send('moveRow', {sheet: __palacedb.state.currentSheet, from: 3, to: 6})")
-check("dragging a row takes its separator with it",
-      wait_for("__palacedb.grid.separatorTitles.has(6) && !__palacedb.grid.separatorTitles.has(3)"),
+check("dragging a row out of a group leaves the heading behind",
+      wait_for("__palacedb.grid.separatorTitles.has(3) && !__palacedb.grid.separatorTitles.has(6)"),
       current_separators())
 
 evaluate("__palacedb.send('undo')")
-check("undo puts the separator back on the dragged row",
-      wait_for("__palacedb.grid.separatorTitles.has(3) && !__palacedb.grid.separatorTitles.has(6)"),
+check("undo leaves the heading where it was",
+      wait_for("__palacedb.grid.separatorTitles.has(3) && __palacedb.grid.separatorTitles.size === 1"),
       current_separators())
 
 evaluate("__palacedb.send('undo')")
@@ -908,10 +915,10 @@ check("table edits undone", ok)
 check("document clean after undo", wait_for("__palacedb.state.document.dirty === false", 6))
 
 # --- separators
-# The sample carries its own dividers, and the row edits above moved them with their rows
-# (that is the behaviour under test). The section starts from a clean slate so its geometry
-# and group checks do not trip over an unrelated divider: every existing separator is
-# removed. Those commands stay on the stack, and the save further down clears the dirty flag.
+# The sample carries its own dividers, and the row edits above shifted them (a heading is
+# still sent as a row index). The section starts from a clean slate so its geometry and
+# group checks do not trip over an unrelated divider: every existing separator is removed.
+# Those commands stay on the stack, and the save further down clears the dirty flag.
 existing_separators = json.loads(evaluate(
     "JSON.stringify(Array.from(__palacedb.grid.separatorTitles.keys()))"))
 for row in existing_separators:
@@ -968,9 +975,13 @@ check("the row of a separator still shows its value",
 text_column = evaluate(
     "(__palacedb.grid.columns.find(c => c.type === 'Text') || __palacedb.grid.columns[0]).name")
 LONG_SEP = "A value that wraps onto several lines " * 8
+# The sample may already wrap this row (a 38 character cell in a 140px column is 58px
+# tall), so what the check has to see is that the long value makes it *taller* and that the
+# undo puts that height back - not that the row has no measured height at all.
+row2_before = evaluate("__palacedb.grid.rowHeights.get(2) || 0")
 evaluate("__palacedb.send('setCell', {sheet: __palacedb.state.currentSheet, row: 2, column: %s, text: %s})"
          % (json.dumps(text_column), json.dumps(LONG_SEP)))
-ok = wait_for("__palacedb.grid.rowHeights.has(2)", 6)
+ok = wait_for("(__palacedb.grid.rowHeights.get(2) || 0) > %d" % row2_before, 6)
 check("a separator row grows for a wrapped value like any other row", ok,
       evaluate("__palacedb.grid.rowHeights.get(2)"))
 
@@ -1001,7 +1012,7 @@ check("the row below a separator still shows its text",
 
 evaluate("__palacedb.send('undo')")
 ok = wait_for("__palacedb.grid.separatorTitles.has(2) && __palacedb.grid.separatorTitles.get(2) === 'Chapter'"
-              " && !__palacedb.grid.rowHeights.has(2)", 8)
+              " && (__palacedb.grid.rowHeights.get(2) || 0) === %d" % row2_before, 8)
 check("separator growth test undone", ok)
 
 evaluate("__palacedb.send('undo')")
@@ -1009,6 +1020,53 @@ time.sleep(0.6)
 evaluate("__palacedb.send('undo')")
 ok = wait_for("__palacedb.grid.separatorTitles.size === %d" % sep_before)
 check("separator edits undone", ok, evaluate("__palacedb.grid.separatorTitles.size"))
+
+# The page is told which rows belong to a heading. It used to work that out from the
+# separator rows, so the fold state and the row ranges could drift from the file; now the
+# host sends the ranges and the page only paints them.
+def sheet_groups():
+    return json.loads(evaluate(
+        "JSON.stringify((__palacedb.state.document.sheets.find("
+        "s => s.name === __palacedb.state.currentSheet) || {}).groups || [])"))
+
+
+evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 2})")
+wait_for("__palacedb.grid.separatorTitles.has(2)", 5)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: __palacedb.state.currentSheet, row: 2, title: 'Chapter'})")
+wait_for("__palacedb.grid.separatorTitles.get(2) === 'Chapter'", 5)
+evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 5})")
+wait_for("__palacedb.grid.separatorTitles.has(5)", 5)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: __palacedb.state.currentSheet, row: 5, title: 'Next'})")
+wait_for("__palacedb.grid.separatorTitles.get(5) === 'Next'", 5)
+
+groups_before = sheet_groups()
+check("the sheet carries its titled groups",
+      [g["title"] for g in groups_before] == ["Chapter", "Next"], groups_before)
+check("a group counts every row up to the next heading",
+      [g["start"] for g in groups_before] == [2, 5] and groups_before[0]["count"] == 3, groups_before)
+check("nothing is folded to start with",
+      all(g["collapsed"] is False for g in groups_before), groups_before)
+
+# A row added below the last row of a group belongs to that group, even though it lands on
+# the index the next heading sits in.
+evaluate("__palacedb.send('insertRow', {sheet: __palacedb.state.currentSheet, row: 5, after: true})")
+time.sleep(0.8)
+groups_after = sheet_groups()
+check("a row added below a group stays in it",
+      groups_after[0]["count"] == groups_before[0]["count"] + 1 and groups_after[1]["start"] == 6,
+      groups_after)
+
+evaluate("__palacedb.send('undo')")
+time.sleep(0.6)
+check("the inserted row is gone again", sheet_groups() == groups_before, sheet_groups())
+
+# Leave the section as it was found: two dividers and two names, the insert already undone.
+for _ in range(4):
+    evaluate("__palacedb.send('undo')")
+    time.sleep(0.3)
+check("the group checks leave no separators behind",
+      wait_for("__palacedb.grid.separatorTitles.size === %d" % sep_before, 6),
+      evaluate("__palacedb.grid.separatorTitles.size"))
 
 # --- table order (S04) and generated index / group fields (S05 / S06)
 def open_table_menu(index):
@@ -2666,13 +2724,6 @@ def column_index(name):
     return evaluate("__palacedb.grid.columns.findIndex(c => c.name === %s)" % json.dumps(name))
 
 
-def mouse_event(x, y, kind, clicks=1):
-    """Sends one mouse event without waiting: the next evaluate() consumes the ack."""
-    counter[0] += 1
-    ws.send(json.dumps({"id": counter[0], "method": "Input.dispatchMouseEvent",
-                        "params": {"type": kind, "x": x, "y": y, "button": "left", "clickCount": clicks}}))
-
-
 def double_click(row, column):
     evaluate("__palacedb.grid.moveCursor(%d, %d)" % (row, column))
     time.sleep(0.25)
@@ -3741,12 +3792,24 @@ def gutter_point(row, half="center"):
     })()""" % (row, {"center": "0.5", "lower": "0.8"}[half]))
 
 
+def band_point(sep_row, offset):
+    """A point inside the strip of the heading in front of `sep_row`, in the gutter."""
+    return evaluate("""(() => {
+      const b = document.querySelector('#gridGutter .gutter-cell.sep-band[data-heading="%d"]');
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height * %s)};
+    })()""" % (sep_row, offset))
+
+
 drag_marks = None
+drag_band = None
 
 
-def drag_gutter(from_row, to_row):
-    """Presses a row number, drags it over another row and releases."""
-    global drag_marks
+def drag_to(from_row, end_point):
+    """Presses a row number, drags it to a point and releases. The point is a callable
+    because selecting the row may scroll the table, so it is measured afterwards."""
+    global drag_marks, drag_band
     evaluate("__palacedb.grid.body.scrollTop = 0")
     time.sleep(0.3)
     start = gutter_point(from_row)
@@ -3754,8 +3817,7 @@ def drag_gutter(from_row, to_row):
         return False
     mouse_event(start["x"], start["y"], "mousePressed")
     time.sleep(0.2)
-    # Selecting the row may scroll the table, so the target is measured afterwards.
-    end = gutter_point(to_row, "lower")
+    end = end_point()
     if not end:
         return False
     steps = 4
@@ -3772,9 +3834,19 @@ def drag_gutter(from_row, to_row):
       drop: document.querySelectorAll('#gridGutter .gutter-cell.drop-before,'
         + ' #gridGutter .gutter-cell.drop-after').length,
     }))()""")
+    drag_band = evaluate("""(() => {
+      const b = document.querySelector('#gridGutter .gutter-cell.sep-band.drop-before,'
+        + ' #gridGutter .gutter-cell.sep-band.drop-after');
+      return b ? (b.classList.contains('drop-before') ? 'above' : 'below') : null;
+    })()""")
     mouse_event(end["x"], end["y"], "mouseReleased")
     time.sleep(1.0)
     return True
+
+
+def drag_gutter(from_row, to_row):
+    """Drags a row number onto the lower half of another row."""
+    return drag_to(from_row, lambda: gutter_point(to_row, "lower"))
 
 
 ids_before = [evaluate("(__palacedb.grid.cellValue(%d, %d) || {}).t" % (row, food_id_col))
@@ -3814,6 +3886,67 @@ ok = wait_for("(__palacedb.grid.cellValue(1, %d) || {}).t === %s"
 check("the keyboard move is undone too", ok,
       [evaluate("(__palacedb.grid.cellValue(%d, %d) || {}).t" % (row, food_id_col))
        for row in range(3)])
+
+# A dropped row lands on one side of a heading or the other: a heading is a strip drawn
+# inside the gap in front of its first row, so that gap means two different groups. The
+# upper half of the strip keeps the row with the rows before it, the lower half makes it the
+# first row of the group. Without the difference the heading could only ever adopt the row,
+# and there was no way to drop a row above one.
+for row in json.loads(evaluate("JSON.stringify(Array.from(__palacedb.grid.separatorTitles.keys()))")):
+    evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: %d})" % row)
+wait_for("__palacedb.grid.separatorTitles.size === 0", 8)
+
+evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 1})")
+wait_for("__palacedb.grid.separatorTitles.has(1)", 6)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: __palacedb.state.currentSheet, row: 1, title: 'Heading'})")
+ok = wait_for("__palacedb.grid.separatorTitles.get(1) === 'Heading'", 6)
+check("a heading is ready for the drop test", ok,
+      evaluate("Array.from(__palacedb.grid.separatorTitles.entries()).map(e => e.join(':')).join(',')"))
+
+ok = drag_to(2, lambda: band_point(1, "0.2")) and wait_for(
+    "(__palacedb.grid.cellValue(1, %d) || {}).t === %s && __palacedb.grid.separatorTitles.has(2)"
+    % (food_id_col, json.dumps(ids_before[2])), 10)
+check("a row dropped above a heading stays out of its group", ok,
+      (evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"),
+       evaluate("(__palacedb.grid.cellValue(1, %d) || {}).t" % food_id_col)))
+check("the drop line is drawn above the strip", drag_band == "above", drag_band)
+
+evaluate("__palacedb.send('undo')")
+ok = wait_for("__palacedb.grid.separatorTitles.has(1) && __palacedb.grid.separatorTitles.size === 1"
+              " && (__palacedb.grid.cellValue(1, %d) || {}).t === %s"
+              % (food_id_col, json.dumps(ids_before[1])), 10)
+check("the drop above a heading is undone", ok,
+      evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"))
+
+ok = drag_to(2, lambda: band_point(1, "0.8")) and wait_for(
+    "(__palacedb.grid.cellValue(1, %d) || {}).t === %s && __palacedb.grid.separatorTitles.has(1)"
+    % (food_id_col, json.dumps(ids_before[2])), 10)
+check("a row dropped under a heading becomes the first row of its group", ok,
+      (evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"),
+       evaluate("(__palacedb.grid.cellValue(1, %d) || {}).t" % food_id_col)))
+check("the drop line is drawn below the strip", drag_band == "below", drag_band)
+
+# A row that sits right above a heading can be dragged below it: the row number does not
+# change (the strip is not a row), so the move used to look like "nothing happened" and was
+# dropped before it reached the host. What changes is the group.
+evaluate("__palacedb.send('undo')")
+wait_for("__palacedb.grid.separatorTitles.has(1)", 8)
+group_before = json.loads(evaluate("JSON.stringify(__palacedb.grid.groups[0])"))
+ok = drag_to(0, lambda: band_point(1, "0.8")) and wait_for(
+    "__palacedb.grid.groups[0].start === 0 && __palacedb.grid.groups[0].count === %d"
+    % (group_before["count"] + 1), 10)
+check("a row just above a heading can be dropped below it", ok,
+      (group_before, evaluate("JSON.stringify(__palacedb.grid.groups[0])")))
+check("the heading moves up to keep that row under it",
+      evaluate("__palacedb.grid.separatorTitles.has(0) && !__palacedb.grid.separatorTitles.has(1)"),
+      evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"))
+
+evaluate("__palacedb.send('undo')")
+wait_for("__palacedb.grid.separatorTitles.has(1)", 8)
+evaluate("__palacedb.send('toggleSeparator', {sheet: __palacedb.state.currentSheet, row: 1})")
+check("the drop test leaves no heading behind",
+      wait_for("__palacedb.grid.separatorTitles.size === 0", 8),
+      evaluate("Array.from(__palacedb.grid.separatorTitles.keys()).join(',')"))
 
 # --- the row-number menu
 menu_point = gutter_point(1)
@@ -4820,6 +4953,32 @@ check("clicking a folded heading unfolds it", ok,
 check("unfolding restores the scrollable height",
       evaluate("__palacedb.grid.contentHeight()") == 9 * 38, evaluate("__palacedb.grid.contentHeight()"))
 
+# Two groups may share a name. The fold used to be remembered by the title, so folding one
+# "MISC" folded all of them - a real file has three. The host keeps it by the position of
+# the group among the titled headings instead, which is what makes them independent.
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: 'GroupTest', row: 4, title: 'Alpha'})")
+ok = wait_for("JSON.stringify(__palacedb.grid.groups.map(g => g.title))"
+              " === JSON.stringify(['Alpha', 'Beta', 'Alpha'])", 8)
+check("two groups can carry the same name", ok,
+      evaluate("JSON.stringify(__palacedb.grid.groups)"))
+
+evaluate("__palacedb.send('setGroupCollapsed', {sheet: 'GroupTest', index: 0, collapsed: true})")
+ok = wait_for("__palacedb.grid.isHidden(0) && __palacedb.grid.isHidden(1)"
+              " && !__palacedb.grid.isHidden(4) && !__palacedb.grid.isHidden(5)", 8)
+check("folding one of two groups with the same name leaves the other open", ok,
+      evaluate("[0,1,4,5].map(i => __palacedb.grid.isHidden(i)).join(',')"))
+check("only the folded one reports the state",
+      evaluate("JSON.stringify(__palacedb.grid.groups.map(g => g.collapsed))") == '[true,false,false]',
+      evaluate("JSON.stringify(__palacedb.grid.groups.map(g => g.collapsed))"))
+
+evaluate("__palacedb.send('setGroupCollapsed', {sheet: 'GroupTest', index: 0, collapsed: false})")
+ok = wait_for("!__palacedb.grid.isHidden(0)", 8)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: 'GroupTest', row: 4, title: 'Gamma'})")
+check("the duplicate-name check leaves the table as it was",
+      wait_for("JSON.stringify(__palacedb.grid.groups.map(g => g.title))"
+               " === JSON.stringify(['Alpha', 'Beta', 'Gamma'])", 8),
+      evaluate("JSON.stringify(__palacedb.grid.groups.map(g => g.title))"))
+
 # --- a folded heading is still drawn when the fold happens off screen
 # The heading of a group used to be picked by its row index. Folding a group whose heading
 # sat above the viewport pulled its strip down into view, but the index was still far above
@@ -4856,7 +5015,7 @@ check("the grid is scrolled away from the first group", first_before >= 5, first
 HIDDEN_ROWS = ("(() => { let n = 0; const grid = __palacedb.grid;"
                " for (let i = 0; i < grid.rowCount; i++) if (grid.isHidden(i)) n++;"
                " return n; })()")
-evaluate("__palacedb.send('setGroupCollapsed', {sheet: 'FoldScroll', title: 'Alpha', collapsed: true})")
+evaluate("__palacedb.send('setGroupCollapsed', {sheet: 'FoldScroll', index: 0, collapsed: true})")
 ok = wait_for("%s === 10" % HIDDEN_ROWS, 10)
 check("folding a group from off screen hides its rows", ok, evaluate(HIDDEN_ROWS))
 check("its heading is still drawn", evaluate("!!document.querySelector('.sep-band[data-group=\"Alpha\"]')"),
@@ -4872,6 +5031,43 @@ check("folding ten rows takes ten rows off the height",
 evaluate("document.querySelector('.sep-band[data-group=\"Alpha\"]').click()")
 ok = wait_for("!__palacedb.grid.isHidden(1)", 10)
 check("the drawn heading still unfolds the group", ok, evaluate(HIDDEN_ROWS))
+
+# Three headings folded above the first drawn row have to stay drawn. `first` is an
+# overscan row index and `snapRow` pushes it past every folded row, so a window starting at
+# `topOf(first)` begins below headings that are still on screen: the first two strips went
+# blank and the space they take with them.
+evaluate("__palacedb.send('toggleSeparator', {sheet: 'FoldScroll', row: 20})")
+time.sleep(0.6)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: 'FoldScroll', row: 20, title: 'Gamma'})")
+time.sleep(0.6)
+evaluate("__palacedb.send('toggleSeparator', {sheet: 'FoldScroll', row: 28})")
+time.sleep(0.6)
+evaluate("__palacedb.send('setSeparatorTitle', {sheet: 'FoldScroll', row: 28, title: 'Delta'})")
+ok = wait_for("__palacedb.grid.separatorStrips.length === 4", 8)
+check("the tall table has four headings", ok,
+      evaluate("JSON.stringify(__palacedb.grid.separatorStrips)"))
+
+evaluate("__palacedb.grid.body.scrollTop = 0")
+time.sleep(0.4)
+for index in (0, 1, 2):
+    evaluate("__palacedb.send('setGroupCollapsed', {sheet: 'FoldScroll', index: %d, collapsed: true})" % index)
+    time.sleep(0.5)
+ok = wait_for("__palacedb.grid.hiddenRowCount() === 28", 10)
+check("three folded groups hide their rows", ok, evaluate("__palacedb.grid.hiddenRowCount()"))
+drawn_strips = evaluate("Array.from(document.querySelectorAll('#gridRows .sep-band'))"
+                        ".map(b => b.dataset.group).join(',')")
+check("every folded heading above the first drawn row is still drawn",
+      drawn_strips == "Alpha,Beta,Gamma,Delta", drawn_strips)
+check("the row numbers keep their place too",
+      evaluate("document.querySelectorAll('#gridGutter .sep-band').length") == 4,
+      evaluate("Array.from(document.querySelectorAll('#gridGutter .sep-band'))"
+               ".map(b => b.dataset.heading).join(',')"))
+
+for index in (0, 1, 2):
+    evaluate("__palacedb.send('setGroupCollapsed', {sheet: 'FoldScroll', index: %d, collapsed: false})" % index)
+    time.sleep(0.4)
+check("the fold check leaves the groups open",
+      wait_for("__palacedb.grid.hiddenRowCount() === 0", 8), evaluate(HIDDEN_ROWS))
 
 # The blocks below work on GroupTest again.
 evaluate("__palacedb.send('selectSheet', {sheet: 'GroupTest'})")

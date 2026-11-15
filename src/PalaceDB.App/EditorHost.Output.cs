@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -286,6 +287,13 @@ public sealed partial class EditorHost
                 columns.Add(info);
             }
 
+            // Folded groups live in the side-car, keyed by the position of the heading among
+            // the titled ones: a row number would move as soon as a row is inserted above
+            // it, and the title is not unique.
+            var collapsedGroups = new HashSet<string>(
+                _document.Meta.GetCollapsedGroups(sheet.Name), StringComparer.Ordinal);
+            var groups = sheet.Groups.TitledGroups();
+
             var sheetObject = new JsonObject
             {
                 ["name"] = sheet.Name,
@@ -300,9 +308,17 @@ public sealed partial class EditorHost
                 ["separatorTitles"] = new JsonArray(
                     sheet.GetSeparators().OrderBy(p => p.Index)
                         .Select(p => (JsonNode?)JsonValue.Create(p.Title ?? string.Empty)).ToArray()),
-                ["collapsedGroups"] = new JsonArray(
-                    _document.Meta.GetCollapsedGroups(sheet.Name)
-                        .Select(t => (JsonNode?)JsonValue.Create(t)).ToArray()),
+                // The page folds groups and keeps rows inside them, so it is told which rows
+                // belong to which heading instead of working it out from the divider rows.
+                ["groups"] = new JsonArray(
+                    groups.Select((group, position) => (JsonNode?)new JsonObject
+                    {
+                        ["title"] = group.Title,
+                        ["start"] = group.Start,
+                        ["count"] = group.Count,
+                        ["collapsed"] = collapsedGroups.Contains(
+                            position.ToString(CultureInfo.InvariantCulture)),
+                    }).ToArray()),
                 ["columns"] = columns,
             };
 

@@ -270,12 +270,13 @@ grid.onContextMenu = ({ header, x, y }) => {
 // Dragging a row number moves the row; the host owns the order, so it is told where the
 // row went and re-sends the table. An open sub-table is anchored to a row number, not to
 // a record, so it is closed first — otherwise it would quietly start showing the list of
-// whatever row took that place.
-grid.onRowMove = (from, to) => {
+// whatever row took that place. `below` says which side of the heading in the landing gap
+// the row was dropped on, which is what decides the group it joins.
+grid.onRowMove = (from, to, below) => {
   if (!state.currentSheet) return;
   flushPendingEdits();
   closeAllPanels();
-  send('moveRow', { sheet: state.currentSheet, from, to });
+  send('moveRow', { sheet: state.currentSheet, from, to, below: below !== false });
 };
 
 // The row number is also where a row is grabbed, so the whole row menu lives here. Every

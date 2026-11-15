@@ -9,18 +9,24 @@ public sealed class RowInsertCommand : IEditorCommand
     private readonly SheetData _sheet;
     private readonly int _index;
     private readonly IReadOnlyList<CdbObject> _rows;
-    // Separators are row indices, so inserting rows above them has to move them too;
-    // otherwise a divider keeps its old number and lands in front of the wrong row.
-    private readonly List<(int Index, string? Title)> _beforeSeparators;
-    private readonly List<(int Index, string? Title)> _afterSeparators;
+    private readonly bool _after;
+    // The new rows join the group of the row they are added next to, which is a local
+    // adjustment to the row counts; the heading indices of the file follow from them at
+    // save time.
+    private readonly Snapshot _beforeSeparators;
 
-    public RowInsertCommand(SheetData sheet, int index, IReadOnlyList<CdbObject> rows, string? label = null)
+    public RowInsertCommand(
+        SheetData sheet,
+        int index,
+        IReadOnlyList<CdbObject> rows,
+        string? label = null,
+        bool after = false)
     {
         _sheet = sheet;
         _index = index;
         _rows = rows;
-        _beforeSeparators = SeparatorTitles.Read(sheet);
-        _afterSeparators = SeparatorTitles.ForInsert(_beforeSeparators, index, rows.Count);
+        _after = after;
+        _beforeSeparators = sheet.Groups.Capture();
         Label = label ?? (rows.Count == 1 ? "Insert Row" : $"Insert {rows.Count} Rows");
     }
 
@@ -37,13 +43,15 @@ public sealed class RowInsertCommand : IEditorCommand
     public void Execute()
     {
         _sheet.Lines.InsertRange(_index, _rows);
-        SeparatorTitles.Write(_sheet, _afterSeparators);
+        // `_after` names the row the insert was anchored to, and its group is the one above
+        // the gap: the two descriptions are the same request.
+        _sheet.Groups.InsertRows(_index, _rows.Count, joinAbove: _after);
     }
 
     public void Undo()
     {
         _sheet.Lines.RemoveRange(_index, _rows.Count);
-        SeparatorTitles.Write(_sheet, _beforeSeparators);
+        _sheet.Groups.Restore(_beforeSeparators);
     }
 }
 
@@ -56,8 +64,7 @@ public sealed class RowDeleteCommand : IEditorCommand
     private readonly SheetData _sheet;
     private readonly int _index;
     private readonly List<CdbObject> _rows;
-    private readonly List<(int Index, string? Title)> _beforeSeparators;
-    private readonly List<(int Index, string? Title)> _afterSeparators;
+    private readonly Snapshot _beforeSeparators;
 
     public RowDeleteCommand(SheetData sheet, int index, int count, string? label = null)
     {
@@ -67,9 +74,7 @@ public sealed class RowDeleteCommand : IEditorCommand
         _sheet = sheet;
         _index = index;
         _rows = sheet.Lines.GetRange(index, count);
-        _beforeSeparators = SeparatorTitles.Read(sheet);
-        _afterSeparators = SeparatorTitles.ForDelete(
-            _beforeSeparators, index, count, sheet.Lines.Count - count);
+        _beforeSeparators = sheet.Groups.Capture();
         Label = label ?? (count == 1 ? "Delete Row" : $"Delete {count} Rows");
     }
 
@@ -86,13 +91,13 @@ public sealed class RowDeleteCommand : IEditorCommand
     public void Execute()
     {
         _sheet.Lines.RemoveRange(_index, _rows.Count);
-        SeparatorTitles.Write(_sheet, _afterSeparators);
+        _sheet.Groups.DeleteRows(_index, _rows.Count);
     }
 
     public void Undo()
     {
         _sheet.Lines.InsertRange(_index, _rows);
-        SeparatorTitles.Write(_sheet, _beforeSeparators);
+        _sheet.Groups.Restore(_beforeSeparators);
     }
 }
 
@@ -102,18 +107,25 @@ public sealed class RowMoveCommand : IEditorCommand
     private readonly SheetData _sheet;
     private readonly int _from;
     private readonly int _to;
-    // A divider heads the row below it, so dragging that row has to carry the divider
-    // along instead of leaving it on the row number the row used to have.
-    private readonly List<(int Index, string? Title)> _beforeSeparators;
-    private readonly List<(int Index, string? Title)> _afterSeparators;
+    private readonly bool _below;
+    // The row changes group when it lands in another one; the headings stay put, because a
+    // heading belongs to the rows it already owns and not to the row that happened to be
+    // first under it.
+    private readonly Snapshot _beforeSeparators;
 
-    public RowMoveCommand(SheetData sheet, int from, int to, string? label = null)
+    /// <summary>
+    /// Moves the row at <paramref name="from"/> to the position <paramref name="to"/>.
+    /// <paramref name="below"/> says which side of the heading that sits at the landing gap
+    /// the row ends up on: under it, as the first row of its group, or above it with the
+    /// rows that come before.
+    /// </summary>
+    public RowMoveCommand(SheetData sheet, int from, int to, bool below = true, string? label = null)
     {
         _sheet = sheet;
         _from = from;
         _to = to;
-        _beforeSeparators = SeparatorTitles.Read(sheet);
-        _afterSeparators = SeparatorTitles.ForMove(_beforeSeparators, from, to);
+        _below = below;
+        _beforeSeparators = sheet.Groups.Capture();
         Label = label ?? "Move Row";
     }
 
@@ -128,7 +140,7 @@ public sealed class RowMoveCommand : IEditorCommand
         var row = _sheet.Lines[_from];
         _sheet.Lines.RemoveAt(_from);
         _sheet.Lines.Insert(_to, row);
-        SeparatorTitles.Write(_sheet, _afterSeparators);
+        _sheet.Groups.MoveRow(_from, _to, _below);
     }
 
     public void Undo()
@@ -136,6 +148,6 @@ public sealed class RowMoveCommand : IEditorCommand
         var row = _sheet.Lines[_to];
         _sheet.Lines.RemoveAt(_to);
         _sheet.Lines.Insert(_from, row);
-        SeparatorTitles.Write(_sheet, _beforeSeparators);
+        _sheet.Groups.Restore(_beforeSeparators);
     }
 }

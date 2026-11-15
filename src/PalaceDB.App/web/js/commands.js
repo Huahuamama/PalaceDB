@@ -94,7 +94,9 @@ export function runAction(action, arg) {
       if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: grid.cursor.row });
       break;
     case 'insertRowBelow':
-      if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: grid.cursor.row + 1 });
+      // "Below" is anchored to the cursor row, not to the next one: at the end of a group
+      // those are different rows and the new one has to stay in the cursor's group.
+      if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: grid.cursor.row + 1, after: true });
       break;
     // The row-number menu acts on the row it was opened on, which is not always the row
     // the cursor sits on (a right-click on another row selects it, a block selection not).
@@ -102,7 +104,7 @@ export function runAction(action, arg) {
       if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: arg });
       break;
     case 'insertRowBelowAt':
-      if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: arg + 1 });
+      if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: arg + 1, after: true });
       break;
     case 'appendRow':
       if (state.currentSheet) send('insertRow', { sheet: state.currentSheet, row: grid.rowCount });
