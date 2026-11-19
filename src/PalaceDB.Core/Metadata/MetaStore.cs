@@ -1,3 +1,4 @@
+using System.Globalization;
 using PalaceDB.Core.Model;
 using PalaceDB.Core.Storage;
 
@@ -359,26 +360,36 @@ public sealed class MetaStore
 
     // ---- collapsed row groups ------------------------------------------
 
-    /// <summary>Titles of the groups that are collapsed in one table.</summary>
+    /// <summary>
+    /// Groups that are collapsed in one table, each as its position among the titled
+    /// headings of that table.
+    /// </summary>
     public IReadOnlyList<string> GetCollapsedGroups(string sheetName) =>
         Document.Tables.TryGetValue(sheetName, out var table)
             ? table.CollapsedGroups
             : Array.Empty<string>();
 
-    public void SetGroupCollapsed(string sheetName, string title, bool collapsed)
+    /// <summary>
+    /// Folds or unfolds the group at <paramref name="index"/>, counted among the titled
+    /// headings. The position is the only handle a group has that survives a row being
+    /// inserted above it, and unlike the title it stays unique when two headings share a
+    /// name - a file may well hold three groups called <c>MISC</c>.
+    /// </summary>
+    public void SetGroupCollapsed(string sheetName, int index, bool collapsed)
     {
-        if (string.IsNullOrEmpty(title))
+        if (index < 0)
             return;
 
+        var key = index.ToString(CultureInfo.InvariantCulture);
         var table = Document.GetOrCreateTable(sheetName);
-        var present = table.CollapsedGroups.Contains(title, StringComparer.Ordinal);
+        var present = table.CollapsedGroups.Contains(key, StringComparer.Ordinal);
         if (collapsed == present)
             return;
 
         if (collapsed)
-            table.CollapsedGroups.Add(title);
+            table.CollapsedGroups.Add(key);
         else
-            table.CollapsedGroups.RemoveAll(t => string.Equals(t, title, StringComparison.Ordinal));
+            table.CollapsedGroups.RemoveAll(entry => string.Equals(entry, key, StringComparison.Ordinal));
         MarkDirty();
     }
 

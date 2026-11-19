@@ -29,22 +29,24 @@ public static class DerivedFields
     /// </summary>
     public static void ApplyGroup(SheetData sheet)
     {
-        var titles = sheet.Props.SeparatorTitles;
-        if (titles is null)
+        if (sheet.Props.SeparatorTitles is null)
             return;
 
-        var separators = sheet.Separators.OrderBy(i => i).ToList();
+        var starts = sheet.Groups.Starts();
         var slot = 0;
         var group = 0;
 
-        if (separators.Count > 0 && separators[0] == 0 && HasTitle(titles, 0))
-            slot++;
-
         for (var row = 0; row < sheet.Lines.Count; row++)
         {
-            if (slot < separators.Count && separators[slot] == row)
+            // Every heading in front of this row counts, not just the first one: two
+            // headings on the same row describe a group with no rows, and the second of
+            // them still opens a group. Consuming one per row left every heading below such
+            // a pair pointing at the wrong number.
+            while (slot < starts.Count && starts[slot].Start == row)
             {
-                if (HasTitle(titles, slot))
+                // A titled heading in front of the first row opens the first group instead
+                // of starting a new one, which is what PalaceDB 1.5 writes.
+                if (starts[slot].Start > 0 && HasTitle(starts[slot].Title))
                     group++;
                 slot++;
             }
@@ -64,10 +66,8 @@ public static class DerivedFields
     }
 
     /// <summary>
-    /// True when the title slot holds text. An empty string is treated as "no title",
-    /// which is what the separator editor writes when the name is cleared.
+    /// True when the heading holds text. An empty string is treated as "no title", which is
+    /// what the separator editor writes when the name is cleared.
     /// </summary>
-    private static bool HasTitle(CdbValue.Arr titles, int slot) =>
-        slot >= 0 && slot < titles.Items.Count
-        && titles.Items[slot] is CdbValue.Str { Value.Length: > 0 };
+    private static bool HasTitle(string? title) => !string.IsNullOrEmpty(title);
 }

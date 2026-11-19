@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PalaceDB.Core.Model;
@@ -88,9 +89,10 @@ public sealed class TableMeta
     public Dictionary<string, Dictionary<string, StyleEntry>> CellStyles { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Titles of the row groups that are collapsed in the grid. A group is the run of rows
-    /// under one titled separator (the <c>group</c> field of the .cdb), so the title is the
-    /// only stable handle it has: row numbers move as soon as a row is inserted.
+    /// The row groups that are collapsed in the grid, each as its position among the titled
+    /// headings of the table. A row number would move as soon as a row is inserted above
+    /// it, and a title is not unique - one file can hold three groups called
+    /// <c>MISC</c> - so the position is what the side-car keeps.
     /// </summary>
     [JsonPropertyName("collapsedGroups")]
     public List<string> CollapsedGroups { get; set; } = new();
@@ -295,18 +297,19 @@ public sealed class MetaDocument
                 if (column.PublicType is { } publicType && !PublicTypes.ContainsKey(publicType))
                     column.PublicType = null;
 
-        // A collapsed group is remembered by the title of its separator. Renaming or
-        // deleting that separator leaves an entry pointing at nothing, which would pile up
-        // in the side-car and collapse an unrelated group that later takes the same name.
+        // A collapsed group is remembered by its position among the titled headings.
+        // Removing a heading moves every group after it down, so an entry can end up
+        // pointing past the last one: it is dropped rather than kept for a group that is
+        // not there, which would fold an unrelated one the moment a heading is added back.
         foreach (var sheet in database.Sheets)
         {
             if (!Tables.TryGetValue(sheet.Name, out var table) || table.CollapsedGroups.Count == 0)
                 continue;
 
-            var titles = new HashSet<string>(
-                sheet.GetSeparators().Select(s => s.Title ?? string.Empty).Where(t => t.Length > 0),
-                StringComparer.Ordinal);
-            table.CollapsedGroups.RemoveAll(title => !titles.Contains(title));
+            var count = sheet.Groups.TitledGroups().Count;
+            table.CollapsedGroups.RemoveAll(entry =>
+                !int.TryParse(entry, NumberStyles.None, CultureInfo.InvariantCulture, out var index) ||
+                index >= count);
         }
     }
 

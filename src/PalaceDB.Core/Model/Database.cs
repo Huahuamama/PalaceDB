@@ -153,7 +153,8 @@ public sealed class SheetData
     public const string KeyProps = "props";
 
     private readonly Database _db;
-    private readonly List<string> _deferredSeparatorIds = new();
+    // Separators as they were read, before the ids are resolved and the rows are counted.
+    private readonly List<(int Index, string? Id, string? Title)> _rawSeparators = new();
     private readonly bool _propsDetached;
 
     public CdbObject Raw { get; }
@@ -164,33 +165,26 @@ public sealed class SheetData
 
     public List<CdbObject> Lines { get; } = new();
 
-    /// <summary>Zero-based row indices where a separator is drawn.</summary>
-    public List<int> Separators { get; } = new();
+    /// <summary>
+    /// The headings of the sheet and the rows each of them owns. This is the model; the
+    /// index array of the .cdb is derived from it when the file is written.
+    /// </summary>
+    public SheetGroups Groups { get; }
+
+    /// <summary>Zero-based row indices where a separator is drawn, in row order.</summary>
+    public IReadOnlyList<int> Separators => Groups.Indexes();
 
     /// <summary>
-    /// Separator positions paired with their optional titles. The two on-disk arrays are
-    /// parallel, so they must always be read and written together.
+    /// Heading positions paired with their optional titles, in row order. The two on-disk
+    /// arrays are parallel, so they are always read and written together.
     /// </summary>
-    public IReadOnlyList<(int Index, string? Title)> GetSeparators()
-    {
-        var titles = Props.SeparatorTitles;
-        var pairs = new List<(int Index, string? Title)>(Separators.Count);
-
-        for (var i = 0; i < Separators.Count; i++)
-        {
-            var title = titles is not null && i < titles.Items.Count
-                ? (titles.Items[i] as CdbValue.Str)?.Value
-                : null;
-            pairs.Add((Separators[i], title));
-        }
-
-        return pairs;
-    }
+    public IReadOnlyList<(int Index, string? Title)> GetSeparators() => Groups.Starts();
 
     internal SheetData(Database db, CdbObject raw)
     {
         _db = db;
         Raw = raw;
+        Groups = new SheetGroups(this);
 
         // A sheet without a "props" object must not gain one just by being opened,
         // otherwise the byte-stable round-trip guarantee would be broken. The object
@@ -201,7 +195,7 @@ public sealed class SheetData
             propsObject = new CdbObject();
             _propsDetached = true;
         }
-        Props = new SheetProps(propsObject);
+        Props = new SheetProps(this, propsObject);
 
         if (raw.GetArray(KeyColumns) is { } cols)
             foreach (var item in cols.Items)
@@ -314,28 +308,36 @@ public sealed class SheetData
         return _db.GetSheet(target);
     }
 
+    /// <summary>
+    /// Collects the separators as they were written. The rows are not counted yet: a
+    /// separator may be stored as an id, which can only be resolved once every sheet has
+    /// been read (<see cref="ResolveDeferred"/>).
+    /// </summary>
     private void ReadSeparators(CdbObject raw)
     {
-        Separators.Clear();
-        _deferredSeparatorIds.Clear();
+        _rawSeparators.Clear();
         if (raw.GetArray(KeySeparators) is not { } arr)
             return;
 
-        foreach (var item in arr.Items)
+        // The titles are parallel to the file, not to the entries that could be understood,
+        // so the position of the item is what picks the title.
+        var titles = Props.SeparatorTitles;
+        for (var i = 0; i < arr.Items.Count; i++)
         {
-            switch (item)
+            var title = titles is not null && i < titles.Items.Count
+                ? (titles.Items[i] as CdbValue.Str)?.Value
+                : null;
+
+            switch (arr.Items[i])
             {
                 case CdbValue.Number n:
-                    Separators.Add((int)n.Value);
+                    _rawSeparators.Add(((int)n.Value, null, title));
                     break;
                 case CdbValue.Obj o:
-                    if (o.Value.GetInt("index") is { } idx)
-                        Separators.Add(idx);
+                    if (o.Value.GetInt("index") is { } index)
+                        _rawSeparators.Add((index, null, title));
                     else if (o.Value.GetString("id") is { } id)
-                    {
-                        _deferredSeparatorIds.Add(id);
-                        Separators.Add(-1);
-                    }
+                        _rawSeparators.Add((-1, id, title));
                     break;
             }
         }
@@ -347,24 +349,27 @@ public sealed class SheetData
         foreach (var column in Columns)
             column.ResolveDeferred();
 
-        if (_deferredSeparatorIds.Count == 0)
-            return;
-
         var idCol = IdColumn;
-        if (idCol is not null)
+        var pairs = new List<(int Index, string? Title)>(_rawSeparators.Count);
+
+        foreach (var (index, id, title) in _rawSeparators)
         {
-            for (var i = 0; i < Separators.Count; i++)
+            if (index >= 0)
             {
-                if (Separators[i] >= 0)
-                    continue;
-                var id = _deferredSeparatorIds[0];
-                _deferredSeparatorIds.RemoveAt(0);
-                var row = Lines.FindIndex(r =>
-                    string.Equals(r.GetString(idCol.Name), id, StringComparison.Ordinal));
-                Separators[i] = row < 0 ? 0 : row;
+                pairs.Add((index, title));
+                continue;
             }
+
+            // An id that names no row has lost its position: the heading goes to the top
+            // rather than pointing at a row that is not there.
+            var row = idCol is null || id is null
+                ? -1
+                : Lines.FindIndex(r => string.Equals(r.GetString(idCol.Name), id, StringComparison.Ordinal));
+            pairs.Add((row < 0 ? 0 : row, title));
         }
-        _deferredSeparatorIds.Clear();
+
+        Groups.Load(pairs, Lines.Count);
+        _rawSeparators.Clear();
     }
 
     /// <summary>
@@ -373,15 +378,39 @@ public sealed class SheetData
     /// </summary>
     internal void FlushSeparators()
     {
+        var indexes = Groups.Indexes();
+
         // Never introduce the key on a sheet that does not use separators, so that
         // opening and saving an untouched file stays byte-identical.
-        if (Separators.Count == 0 && !Raw.ContainsKey(KeySeparators))
+        if (indexes.Count == 0 && !Raw.ContainsKey(KeySeparators))
             return;
 
         var arr = new CdbValue.Arr();
-        foreach (var index in Separators.OrderBy(i => i))
+        foreach (var index in indexes)
             arr.Items.Add(new CdbValue.Number(index, null));
         Raw.Set(KeySeparators, arr);
+    }
+
+    /// <summary>
+    /// Rewrites <c>props.separatorTitles</c> from the group list, so the two arrays of the
+    /// file stay parallel. Only called when a heading is added, renamed or removed: an
+    /// untouched file has to keep the array it was read with, byte for byte.
+    /// </summary>
+    internal void SyncSeparatorTitles()
+    {
+        if (Groups.Items.All(group => string.IsNullOrEmpty(group.Title)))
+        {
+            Props.SeparatorTitles = null;
+            return;
+        }
+
+        // An untitled divider is stored as an explicit null, which is how PalaceDB 1.5
+        // distinguishes "no title" from an empty one.
+        var array = new CdbValue.Arr();
+        foreach (var group in Groups.Items)
+            array.Items.Add(group.Title is null ? CdbValue.NullValue : new CdbValue.Str(group.Title));
+
+        Props.SeparatorTitles = array;
     }
 
     internal Database Owner => _db;
@@ -430,9 +459,15 @@ public sealed class SheetData
 /// <summary>Typed view over the <c>props</c> object of a sheet.</summary>
 public sealed class SheetProps
 {
+    private readonly SheetData _owner;
+
     public CdbObject Raw { get; }
 
-    internal SheetProps(CdbObject raw) => Raw = raw;
+    internal SheetProps(SheetData owner, CdbObject raw)
+    {
+        _owner = owner;
+        Raw = raw;
+    }
 
     public string? DisplayColumn
     {
@@ -476,11 +511,25 @@ public sealed class SheetProps
         set => SetOrRemove("dataFiles", value is null ? null : new CdbValue.Str(value));
     }
 
-    /// <summary>Optional separator titles, parallel to <see cref="SheetData.Separators"/>.</summary>
+    /// <summary>
+    /// Optional separator titles, parallel to <see cref="SheetData.Separators"/>. Writing the
+    /// array also hands the titles to the headings, so a caller that edits the on-disk shape
+    /// does not leave the model behind.
+    /// </summary>
     public CdbValue.Arr? SeparatorTitles
     {
         get => Raw.GetArray("separatorTitles");
-        set => SetOrRemove("separatorTitles", value);
+        set
+        {
+            SetOrRemove("separatorTitles", value);
+
+            var titles = new List<string?>(value?.Items.Count ?? 0);
+            if (value is not null)
+                foreach (var item in value.Items)
+                    titles.Add((item as CdbValue.Str)?.Value);
+
+            _owner.Groups.ApplyTitles(titles);
+        }
     }
 
     public string? GetSeparatorTitle(int separatorIndex)

@@ -99,10 +99,13 @@ export class Grid {
     // The same separators as a sorted list: a strip is one row tall, so everything below
     // it has to move down by one row per separator above it.
     this.separatorRows = [];
+    // The titled groups, exactly as the host sends them: { title, start, count, collapsed }.
+    // Which rows belong to which heading depends on the file's own dividers, so the page is
+    // told instead of working it out from the separator rows.
+    this.groups = [];
     // Rows folded away under a collapsed group heading. `hiddenRows` is the per-row flag
     // and `hiddenPrefix[i]` counts the hidden rows above row i, which is what turns "how
     // far down is row N" back into an O(1) calculation (see topOf).
-    this.collapsedGroups = new Set();
     this.hiddenRows = null;
     this.hiddenPrefix = [0];
     // Separators whose strip is drawn: the visible ones plus the headings of folded
@@ -269,13 +272,23 @@ export class Grid {
     });
     this.separatorRows = [...this.separatorTitles.keys()].sort((a, b) => a - b);
 
-    // Folded groups come from the side-car. A refresh usually brings the set the grid
-    // already has, and re-measuring then would throw away every row height for nothing.
-    const collapsed = sheet && Array.isArray(sheet.collapsedGroups) ? sheet.collapsedGroups : [];
-    const collapsedChanged = collapsed.length !== this.collapsedGroups.size
-      || collapsed.some((title) => !this.collapsedGroups.has(title));
-    this.collapsedGroups = new Set(collapsed);
-    this.rebuildVisibility({ remeasure: collapsedChanged });
+    // Folded groups come from the side-car, by way of the host. A refresh usually brings
+    // the set the grid already has, and re-measuring then would throw away every row
+    // height for nothing.
+    //
+    // Nothing is measured here on purpose: the group ranges move with every row inserted
+    // above them, so comparing them would look like a change on a plain insert and the
+    // heights would go, shortening the table under the viewport. What a fold needs instead
+    // is handled by rebuildVisibility, which forgets the height of the rows it hides.
+    this.groups = sheet && Array.isArray(sheet.groups)
+      ? sheet.groups.map((group) => ({
+        title: group.title || '',
+        start: group.start | 0,
+        count: group.count | 0,
+        collapsed: Boolean(group.collapsed),
+      }))
+      : [];
+    this.rebuildVisibility();
 
     this.cache.clear();
     // A different table wraps differently: nothing measured for the old one applies.
@@ -494,23 +507,19 @@ export class Grid {
   /**
    * Works out which rows a collapsed group hides.
    *
-   * A group is the run of rows under one *titled* separator, which is exactly what the
-   * `group` field of the .cdb describes (see DerivedFields.ApplyGroup): an untitled
-   * separator is a divider inside the group, not the start of a new one. The rows above
-   * the first titled separator have no heading to click, so they are never folded.
+   * The groups arrive with their row ranges, so this only has to paint the hidden rows:
+   * every row of a folded group goes, its heading row included - the strip is drawn in that
+   * row's place (see separatorTop), so the group keeps an entry point to unfold it.
    */
   rebuildVisibility({ remeasure = false } = {}) {
     const count = this.rowCount;
     const hidden = new Uint8Array(count);
-    const titled = this.separatorRows.filter((row) => (this.separatorTitles.get(row) || '').length > 0);
     const foldedStarts = new Set();
 
-    for (let position = 0; position < titled.length; position += 1) {
-      const start = titled[position];
-      if (!this.collapsedGroups.has(this.separatorTitles.get(start))) continue;
-      foldedStarts.add(start);
-      const end = position + 1 < titled.length ? titled[position + 1] : count;
-      hidden.fill(1, start, Math.min(end, count));
+    for (const group of this.groups) {
+      if (!group.collapsed) continue;
+      foldedStarts.add(group.start);
+      hidden.fill(1, group.start, Math.min(group.start + group.count, count));
     }
 
     const prefix = new Int32Array(count + 1);
@@ -519,16 +528,32 @@ export class Grid {
     this.hiddenRows = hidden;
     this.hiddenPrefix = prefix;
     // A separator keeps its strip when its row is drawn, and also when it heads a folded
-    // group: the strip is the heading that folds and unfolds it. A separator *inside* a
+    // group: the strip is the heading that folds and unfolds it. A separator inside a
     // folded group is folded with it.
     this.separatorStrips = this.separatorRows.filter((row) => !hidden[row] || foldedStarts.has(row));
 
     if (remeasure) {
-      // A folded row must not leave its measured height behind: the heights above a row
-      // are what place it, and a row that is not drawn has no height at all.
+      // Everything is stale: a new font, a resized column, a different row count.
       this.rowHeights.clear();
       this.heightIndexDirty = true;
+    } else {
+      // Only the folded rows are: a row that is not drawn takes no room, and its measured
+      // height would keep counting towards the content height and push everything below
+      // it down. Clearing every height instead used to be the answer, but that shortens
+      // the table under the viewport and the browser clamps the scroll position.
+      this.forgetFoldedHeights();
     }
+  }
+
+  /** Forgets the height of every row a fold hides, and of the rows that stay hidden. */
+  forgetFoldedHeights() {
+    let dropped = false;
+    for (const row of [...this.rowHeights.keys()]) {
+      if (!this.isHidden(row)) continue;
+      this.rowHeights.delete(row);
+      dropped = true;
+    }
+    if (dropped) this.heightIndexDirty = true;
   }
 
   isHidden(row) {
@@ -563,28 +588,20 @@ export class Grid {
     return 0;
   }
 
-  /** How many rows one group holds, the row of its heading included. */
-  groupSize(index) {
-    const titled = this.separatorRows.filter((row) => (this.separatorTitles.get(row) || '').length > 0);
-    const position = titled.indexOf(index);
-    if (position < 0) return 0;
-    const end = position + 1 < titled.length ? titled[position + 1] : this.rowCount;
-    return end - index;
-  }
-
   /**
    * Folds or unfolds the group that starts at `index`. The state changes here at once so
    * the click has an immediate effect; the host writes it to the side-car and re-sends the
-   * document, which carries the same set back.
+   * document, which carries the same state back.
+   *
+   * The host remembers the fold by the position of the group among the titled headings, so
+   * that is what is reported: a row number moves with every insert above it, and the title
+   * is not unique - three groups of a file may all be called "MISC".
    */
   toggleGroup(index) {
-    const title = this.separatorTitles.get(index) || '';
-    if (!title) return;
+    const group = this.groups.find((candidate) => candidate.start === index);
+    if (!group) return;
 
-    const collapsed = !this.collapsedGroups.has(title);
-    if (collapsed) this.collapsedGroups.add(title);
-    else this.collapsedGroups.delete(title);
-
+    group.collapsed = !group.collapsed;
     this.rebuildVisibility({ remeasure: true });
 
     // A sub-table is anchored to a row number, so one that was folded away is closed
@@ -602,7 +619,7 @@ export class Grid {
 
     this.render();
     this.emitCursor();
-    if (this.onGroupToggled) this.onGroupToggled(title, collapsed);
+    if (this.onGroupToggled) this.onGroupToggled(this.groups.indexOf(group), group.collapsed);
   }
 
   /**
@@ -970,8 +987,14 @@ export class Grid {
     // folded group sits where its first hidden row would have been, which can be far below
     // the separator's own index — filtering by index dropped the heading as soon as the
     // view had scrolled past the start of the group, and it never came back.
-    const windowTop = this.topOf(first);
-    const windowBottom = this.topOf(Math.min(last, this.rowCount));
+    //
+    // The window is the scroll position, not the first drawn row: a folded group pushes
+    // `first` past its own heading (snapRow jumps to the first row still shown), so
+    // `topOf(first)` already sits below a heading that is on screen. Filtering by it left
+    // the slot of every heading above the first drawn row blank - with three groups folded
+    // above the viewport, the first two headings vanished.
+    const windowTop = scrollTop - OVERSCAN * ROW_HEIGHT;
+    const windowBottom = scrollTop + viewportHeight + OVERSCAN * ROW_HEIGHT;
     for (const separator of this.separatorStrips) {
       const top = this.separatorTop(separator);
       // `<` on the top edge: a strip that ends exactly where the window starts is the one
@@ -1027,15 +1050,21 @@ export class Grid {
     }
 
     // The strip the separator is drawn in also takes its row in the gutter, so the column
-    // of numbers stays continuous instead of showing a hole. Same y test as the strips
-    // themselves: a folded heading is not at its own row index (see render).
+    // of numbers stays continuous instead of showing a hole. Same window as the strips
+    // themselves: the scroll position, not the first drawn row (see render).
+    const windowTop = scrollTop - OVERSCAN * ROW_HEIGHT;
+    const windowBottom = scrollTop + this.body.clientHeight + OVERSCAN * ROW_HEIGHT;
     for (const separator of this.separatorStrips) {
       const top = this.separatorTop(separator);
-      if (top + ROW_HEIGHT < this.topOf(first) || top >= this.topOf(Math.min(last, this.rowCount))) continue;
+      if (top + ROW_HEIGHT < windowTop || top >= windowBottom) continue;
       const band = document.createElement('div');
       band.className = 'gutter-cell sep-band';
       band.style.top = top - scrollTop + 'px';
       band.style.height = ROW_HEIGHT + 'px';
+      // Named so a dragged row can be dropped on either side of the heading. Not
+      // `data-sep`: that marks the strip drawn in the rows layer, and the two would shadow
+      // each other in a plain query.
+      band.dataset.heading = String(separator);
       fragment.appendChild(band);
     }
 
@@ -1160,8 +1189,9 @@ export class Grid {
   buildSeparator(index) {
     const band = document.createElement('div');
     const title = this.separatorTitles.get(index) || '';
-    const folded = Boolean(title) && this.collapsedGroups.has(title);
-    const size = title ? this.groupSize(index) : 0;
+    const group = title ? this.groups.find((candidate) => candidate.start === index) : null;
+    const folded = Boolean(group && group.collapsed);
+    const size = group ? group.count : 0;
 
     band.className = 'grid-row sep-band' + (title ? ' group-head' : '') + (folded ? ' folded' : '');
     band.style.top = this.separatorTop(index) + 'px';
@@ -1424,7 +1454,7 @@ export class Grid {
   beginRowDrag(from, event) {
     if (!this.onRowMove || this.rowCount < 2) return;
 
-    const state = { from, startY: event.clientY, active: false, insert: from };
+    const state = { from, startY: event.clientY, active: false, insert: { gap: from, below: true } };
     this.rowDrag = state;
 
     const onMove = (moveEvent) => {
@@ -1434,8 +1464,8 @@ export class Grid {
       }
 
       this.autoScrollFor(moveEvent.clientY);
-      const hit = this.rowAtY(moveEvent.clientY);
-      if (hit) state.insert = hit.after ? hit.row + 1 : hit.row;
+      const slot = this.dropSlotAt(moveEvent.clientY);
+      if (slot) state.insert = slot;
       this.paintDropTarget(state);
     };
 
@@ -1447,19 +1477,41 @@ export class Grid {
 
       if (!state.active) return;
 
-      // Dropping "after" a row that is above the dragged one cancels out the gap the row
-      // leaves behind when it is taken out of the list.
-      let to = state.insert > state.from ? state.insert - 1 : state.insert;
-      to = clamp(to, 0, this.rowCount - 1);
-      if (to !== state.from) this.onRowMove(state.from, to);
+      // Taking the row out first closes the gap it leaves behind, which moves every landing
+      // position below it up by one.
+      const { gap, below } = state.insert;
+      let to = gap > state.from ? gap - 1 : gap;
+      to = clamp(to, 0, Math.max(0, this.rowCount - 1));
+
+      // A drop back onto the row's own gap does not move it, but it can still move it into
+      // another group: the strip that sits in the gap decides which one. Above the strip in
+      // front of the row it leaves its group, below the strip in front of the next row it
+      // joins the next one. Treating both as "nothing happened" swallowed the second: a row
+      // that sits right above a heading could not be dragged below it.
+      const from = state.from;
+      let staysPut;
+      if (to !== from) staysPut = false;
+      else if (gap === from) staysPut = below || !this.separatorTitles.has(from);
+      else staysPut = !below || !this.separatorTitles.has(from + 1);
+
+      if (!staysPut) this.onRowMove(from, to, below);
     };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   }
 
-  /** Row under a viewport y, and whether the pointer is in its lower half. */
-  rowAtY(clientY) {
+  /**
+   * Where a dragged row would land: the gap it goes into, and which side of the heading
+   * that sits in that gap.
+   *
+   * A heading is a strip drawn inside the gap in front of its first row, so one gap means
+   * two different groups. The upper half of the strip keeps the row with the rows before
+   * the heading, the lower half makes it the first row of the group. A row without a
+   * heading above it only has one meaning, which is why the flag follows whether the gap
+   * holds a strip.
+   */
+  dropSlotAt(clientY) {
     if (!this.gutter) return null;
 
     const rect = this.gutter.getBoundingClientRect();
@@ -1469,17 +1521,27 @@ export class Grid {
     let bestDistance = Infinity;
 
     for (const cell of this.gutter.children) {
-      const top = parseFloat(cell.style.top) || 0;
-      const height = this.heightOf(Number(cell.dataset.row));
-      const bottom = top + height;
-      const row = Number(cell.dataset.row);
+      const strip = cell.dataset.heading;
+      const row = Number(strip === undefined ? cell.dataset.row : strip);
+      if (Number.isNaN(row)) continue;
 
-      if (y >= top && y < bottom) return { row, after: y - top > height / 2 };
+      const top = parseFloat(cell.style.top) || 0;
+      const height = strip === undefined ? this.heightOf(row) : ROW_HEIGHT;
+      const bottom = top + height;
+      const lower = y - top > height / 2;
+
+      const slot = strip !== undefined
+        ? { gap: row, below: lower }
+        : (lower
+          ? { gap: row + 1, below: false }
+          : { gap: row, below: this.separatorTitles.has(row) });
+
+      if (y >= top && y < bottom) return slot;
 
       const distance = y < top ? top - y : y - bottom;
       if (distance < bestDistance) {
         bestDistance = distance;
-        best = { row, after: y > top + height / 2 };
+        best = slot;
       }
     }
 
@@ -1492,13 +1554,24 @@ export class Grid {
     const dragged = this.gutter.querySelector(`.gutter-cell[data-row="${state.from}"]`);
     if (dragged) dragged.classList.add('dragging');
 
+    const { gap, below } = state.insert;
     const last = this.rowCount - 1;
-    const at = clamp(state.insert, 0, this.rowCount);
-    const cell = at <= last
-      ? this.gutter.querySelector(`.gutter-cell[data-row="${at}"]`)
-      : this.gutter.querySelector(`.gutter-cell[data-row="${last}"]`);
 
-    if (cell) cell.classList.add(at <= last ? 'drop-before' : 'drop-after');
+    // A heading in the gap is what the line has to touch: above the strip or below it is
+    // exactly the difference between the two groups it separates.
+    const band = this.gutter.querySelector(`.gutter-cell.sep-band[data-heading="${gap}"]`);
+    if (band) {
+      band.classList.add(below ? 'drop-after' : 'drop-before');
+      return;
+    }
+
+    if (gap <= last) {
+      const cell = this.gutter.querySelector(`.gutter-cell[data-row="${gap}"]`);
+      if (cell) cell.classList.add('drop-before');
+    } else if (last >= 0) {
+      const cell = this.gutter.querySelector(`.gutter-cell[data-row="${last}"]`);
+      if (cell) cell.classList.add('drop-after');
+    }
   }
 
   clearDropTarget() {
@@ -1766,7 +1839,9 @@ export class Grid {
     if (!this.onRowMove || this.rowCount < 2) return;
     const to = clamp(this.cursor.row + delta, 0, this.rowCount - 1);
     if (to === this.cursor.row) return;
-    this.onRowMove(this.cursor.row, to);
+    // The row goes the way the cursor went, so it lands below the heading it may cross
+    // rather than being pulled back above it.
+    this.onRowMove(this.cursor.row, to, true);
   }
 
   currentType() {
